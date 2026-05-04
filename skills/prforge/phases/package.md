@@ -6,6 +6,24 @@ Read this file at the START of PACKAGE before doing any work.
 
 Generate the final output artifacts.
 
+## Coding Discipline
+
+Companion plugins are optional inputs. PRForge policy gates are mandatory outputs.
+
+1. If `andrej-karpathy-skills` is installed:
+   - PACKAGE MUST include a mandatory discipline verdict in `approval.md`:
+     - Status: PASS | WARNING | BLOCKED
+     - Was the change surgical and minimal?
+     - Were no unnecessary abstractions introduced?
+     - Did every line map to the stated objective?
+   - Discipline status BLOCKED BLOCKS `approval.md` generation and REDIRECTS to SELF_REVIEW.
+
+2. If `andrej-karpathy-skills` is not installed:
+   - PACKAGE MUST use PRForge's built-in `hostile_review.md` and `dod.md` for the same verdicts.
+   - Absence of the external plugin MUST NOT weaken the discipline verdict.
+
+3. PACKAGE cannot produce `approval.md` unless the discipline verdict is PASS or WARNING with justification.
+
 ## Guard #1: Review Freshness Check
 
 Before packaging, re-fetch the PR review state:
@@ -111,12 +129,12 @@ rebase so the PR tells a coherent story with a meaningful HEAD hash.
 
 ## For Review Responses: `review_response.md`
 
-**FINALITY RULE — commit hash at top of every response:**
+**FINALITY RULE — MUST include commit hash at top of every response:**
 
-At the very top of every review response, before any text, include the git commit
+At the very top of every review response, before any text, MUST include the git commit
 hash that addresses the reviewed changes. This makes the reviewer's job easier —
 they can `git show <hash>` or click the hash in the GitHub UI to see exactly
-what changed in response to their feedback.
+what changed in response to their feedback. Omitting the hash BLOCKS phase exit.
 
 ```markdown
 # Maintainer Response Draft

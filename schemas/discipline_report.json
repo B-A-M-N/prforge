@@ -1,0 +1,42 @@
+{
+  "$schema": "http://json-schema.org/draft/2020-12/schema",
+  "title": "PRForge Discipline Report",
+  "type": "object",
+  "required": ["status", "phase", "checks", "findings", "required_recovery"],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["PASS", "WARNING", "BLOCKED"]
+    },
+    "phase": {
+      "type": "string",
+      "description": "Phase when the check ran"
+    },
+    "checks": {
+      "type": "object",
+      "properties": {
+        "files_within_contract": { "type": "boolean" },
+        "dependency_files_touched": { "type": "boolean" },
+        "unexpected_refactor_risk": { "type": "boolean" },
+        "validation_required": { "type": "boolean" },
+        "diff_size_acceptable": { "type": "boolean" }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["severity", "type", "message"],
+        "properties": {
+          "severity": { "type": "string", "enum": ["blocker", "warning", "info"] },
+          "type": { "type": "string" },
+          "message": { "type": "string" }
+        }
+      }
+    },
+    "required_recovery": {
+      "type": "string",
+      "description": "Recovery instruction for blocked phase"
+    }
+  }
+}

@@ -7,6 +7,10 @@
 # Don't let errors kill this hook — it's advisory
 set +e
 
+# Diagnostic: log hook invocation (minimal, for validation only)
+mkdir -p "$(git rev-parse --show-toplevel 2>/dev/null)/.prforge" 2>/dev/null
+echo "$(date -Iseconds) [phase-injector] Write/Edit hook fired" >> "$(git rev-parse --show-toplevel 2>/dev/null)/.prforge/hook_events.log" 2>/dev/null || true
+
 HOOK_JSON=$(cat)
 
 # --- Parse file_path ---

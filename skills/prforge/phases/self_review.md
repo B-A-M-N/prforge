@@ -6,6 +6,25 @@ Read this file at the START of SELF_REVIEW before doing any work.
 
 Audit your own diff as if you were a maintainer trying to reject this PR.
 
+## Coding Discipline Audit
+
+Companion plugins are optional inputs. PRForge policy gates are mandatory outputs.
+
+1. If `andrej-karpathy-skills` is installed:
+   - SELF_REVIEW MUST include a mandatory discipline audit section.
+   - Required questions:
+     - Did I think before coding, or rush into edits?
+     - Is this the smallest correct fix, or did I over-engineer?
+     - Were my changes surgical, or did I rewrite unrelated code?
+     - Is every changed line goal-driven and mapped to the issue?
+   - Discipline audit FAILURE BLOCKS phase exit and REDIRECTS to IMPLEMENT.
+
+2. If `andrej-karpathy-skills` is not installed:
+   - SELF_REVIEW MUST use PRForge's built-in hostile review checklist with the same discipline questions.
+   - Absence of the external plugin MUST NOT weaken the audit.
+
+3. SELF_REVIEW cannot complete unless the discipline audit passes.
+
 Use the checklist in `references/hostile-review-checklist.md`. For each "no" or
 "unclear" answer, fix before proceeding.
 

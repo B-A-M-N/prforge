@@ -79,6 +79,27 @@ INTAKE → INVESTIGATE → PLAN → IMPLEMENT → VALIDATE → SELF_REVIEW → P
 | **APPROVAL** | Present the approval artifact. Wait for user decision. | **Approval screen** |
 | **SHIPPED** | Execute the approved action (push, post, create PR). | Confirmation |
 
+## Coding Discipline (Mandatory Enforcement)
+
+Companion plugins are optional inputs. PRForge policy gates are mandatory outputs.
+
+1. If `andrej-karpathy-skills` is installed:
+   - PRForge MUST treat its coding-discipline rules as mandatory phase gates.
+   - PLAN, IMPLEMENT, SELF_REVIEW, and PACKAGE MUST reference and satisfy them.
+   - Failure to satisfy them BLOCKS phase exit or REDIRECTS to the correct recovery phase.
+
+2. If `andrej-karpathy-skills` is not installed:
+   - PRForge MUST use its own built-in `policies/coding-discipline.md` fallback.
+   - The fallback MUST enforce the same behavioral requirements.
+   - Absence of the external plugin MUST NOT weaken PRForge enforcement.
+
+3. Phase exit gates that enforce discipline:
+   - PLAN cannot complete unless `coding_discipline.md` exists and is satisfied.
+   - IMPLEMENT cannot complete unless changed files comply with the discipline contract.
+   - SELF_REVIEW cannot complete unless the discipline audit passes.
+   - PACKAGE cannot produce `approval.md` unless the discipline verdict is PASS or WARNING with justification.
+   - APPROVAL cannot proceed if discipline status is BLOCKED.
+
 If any phase hits a recoverable policy violation, transition through a repair
 state and then return to the original phase. Use **BLOCKED** only for terminal
 conditions that need a user decision, missing secrets, unavailable infrastructure,

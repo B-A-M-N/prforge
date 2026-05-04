@@ -7,6 +7,21 @@ Read this file at the START of IMPLEMENT before doing any work.
 Execute the patch plan. Apply the smallest correct change. **Every changed source
 file MUST have corresponding test changes.** No exceptions without documented justification.
 
+## Coding Discipline
+
+Companion plugins are optional inputs. PRForge policy gates are mandatory outputs.
+
+1. If `andrej-karpathy-skills` is installed:
+   - PRForge MUST treat its coding-discipline rules as mandatory during IMPLEMENT.
+   - Every edit MUST comply with: think before coding, prefer simplicity, surgical changes, goal-driven execution.
+   - Failure to comply BLOCKS phase exit or REDIRECTS to PLAN to update contract/patch_plan/dod.
+
+2. If `andrej-karpathy-skills` is not installed:
+   - PRForge MUST enforce the same discipline via contract.md, patch_plan.md, and hooks.
+   - Absence of the external plugin MUST NOT weaken IMPLEMENT enforcement.
+
+3. IMPLEMENT cannot complete unless changed files comply with the discipline contract.
+
 ## Rules
 
 - Only touch files listed in the contract

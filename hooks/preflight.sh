@@ -10,6 +10,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=hooks/prforge-common.sh
 . "$SCRIPT_DIR/prforge-common.sh"
 
+# Diagnostic: log hook invocation (minimal, for validation only)
+mkdir -p "$(git rev-parse --show-toplevel 2>/dev/null)/.prforge" 2>/dev/null
+echo "$(date -Iseconds) [preflight] Bash hook fired" >> "$(git rev-parse --show-toplevel 2>/dev/null)/.prforge/hook_events.log" 2>/dev/null || true
+
 # --- Read Hook Input ---
 HOOK_JSON=$(cat)
 

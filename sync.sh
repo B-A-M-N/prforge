@@ -5,7 +5,7 @@
 set -euo pipefail
 
 SRC="/home/bamn/prforge"
-PROFILES=(1 2 3)
+FILES=(1 2 3)
 DRY_RUN=""
 
 if [[ "${1:-}" == "--dry-run" ]]; then
@@ -18,7 +18,7 @@ RSYNC_OPTS=(-a --delete --exclude='.prforge/' --exclude='.remember/' --exclude='
 ok=0
 fail=0
 
-for n in "${PROFILES[@]}"; do
+for n in "${FILES[@]}"; do
   PROFILE="$HOME/.claude-openrouter-${n}"
   MARKETPLACE_DST="${PROFILE}/plugins/marketplaces/local/plugins/prforge"
   CACHE_DST="${PROFILE}/plugins/cache/local/prforge/1.0.0"
@@ -30,6 +30,11 @@ for n in "${PROFILES[@]}"; do
       continue
     fi
     if rsync "${RSYNC_OPTS[@]}" "$SRC/" "$DST/"; then
+      # Fix: move .claude-plugin/plugin.json to plugin.json at root
+      if [[ -f "$DST/.claude-plugin/plugin.json" ]]; then
+        cp "$DST/.claude-plugin/plugin.json" "$DST/plugin.json"
+      fi
+      rm -rf "$DST/.claude-plugin"
       echo "  OK    $label"
       ((ok++)) || true
     else

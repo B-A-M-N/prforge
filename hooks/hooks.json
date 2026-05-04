@@ -58,6 +58,17 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "description": "PRForge discipline check — after Write/Edit/MultiEdit, verifies coding discipline compliance",
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/discipline-check.sh\"",
+            "timeout": 10
+          }
+        ]
       }
     ]
   },

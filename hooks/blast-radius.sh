@@ -19,6 +19,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=hooks/prforge-common.sh
 . "$SCRIPT_DIR/prforge-common.sh"
 
+# Diagnostic: log hook invocation (minimal, for validation only)
+mkdir -p "$(git rev-parse --show-toplevel 2>/dev/null)/.prforge" 2>/dev/null
+echo "$(date -Iseconds) [blast-radius] Write/Edit hook fired" >> "$(git rev-parse --show-toplevel 2>/dev/null)/.prforge/hook_events.log" 2>/dev/null || true
+
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
 HARNESS_DIR=$(prforge_artifact_dir "$REPO_ROOT")
 prforge_ensure_pointer "$REPO_ROOT" "$HARNESS_DIR" || exit 0

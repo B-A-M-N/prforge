@@ -18,6 +18,24 @@ At PLAN time, load and merge the state schema:
 
 ---
 
+## Coding Discipline (Companion Plugin Reference)
+
+Companion plugins are optional inputs. PRForge policy gates are mandatory outputs.
+
+1. If `andrej-karpathy-skills` is installed:
+   - PRForge MUST treat its coding-discipline rules as mandatory phase gates.
+   - PLAN MUST reference and satisfy them before phase exit.
+   - Failure to satisfy them BLOCKS phase exit or REDIRECTS to the correct recovery phase.
+
+2. If `andrej-karpathy-skills` is not installed:
+   - PRForge MUST use its own built-in `policies/coding-discipline.md` fallback.
+   - The fallback MUST enforce the same behavioral requirements.
+   - Absense of the external plugin MUST NOT weaken PRForge enforcement.
+
+3. PLAN cannot complete unless `coding_discipline.md` exists and is satisfied.
+
+---
+
 Create the scope contract and patch plan.
 
 ## `contract.md`

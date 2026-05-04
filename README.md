@@ -225,9 +225,9 @@ A distributed wrapper around standalone PRForge that coordinates work across mul
 | **Worker** | `scripts/mesh/worker.py` | Heartbeat loop: inbox write, phase reporting, lease renewal |
 | **Manager** | `scripts/mesh/manager.py` | Manager Mode: certification, authority gating, public action control |
 | **Policy Engine** | `scripts/mesh/policy_engine.py` | Deterministic + adaptive policy decision engine |
-| **Intel Engine** | `scripts/mesh/intel_engine.py` | RAG-based fastembed system to detect subtle risk signals from artifacts |
+| **Intel Engine** | `scripts/mesh/intel_engine.py` | RAG-based fastembed system (embeddings + reranking) to detect subtle risk signals from artifacts |
 | **Mesh Signing** | `scripts/mesh/mesh_signing.py` | HMAC-SHA256 artifact signing and verification for distributed mode |
-| **DB Backend** | `scripts/mesh/db_backend.py` | Database abstraction for mesh state persistence |
+| **DB Backend** | `scripts/mesh/db_backend.py` | Database abstraction: SQLite3 default for local/standalone (auto-creates `~/.prforge-intel/index/metadata.sqlite`, works out-of-the-gate); hooks ready for PostgreSQL/pgvector in distributed mesh (requires setup) |
 | **Redis Backend** | `scripts/mesh/redis_backend.py` | Redis Streams job queue, heartbeats, leases, and state |
 
 #### Distributed CLI Agent Model
@@ -335,6 +335,37 @@ When GitNexus is unavailable, the hook records exactly which capabilities were m
 - Overall score: `low` / `medium` / `high`
 
 Results feed into the scope delta check, SELF_REVIEW gates, and approval status computation.
+
+### Coding Discipline Enforcement
+
+PRForge enforces coding discipline through mandatory phase gates, not optional guidelines.
+
+**Companion plugins are optional inputs. PRForge policy gates are mandatory outputs.**
+
+| Scenario | Enforcement |
+|-----------|-------------|
+| `andrej-karpathy-skills` is installed | PRForge MUST treat its coding-discipline rules as mandatory phase gates. PLAN, IMPLEMENT, SELF_REVIEW, and PACKAGE must reference and satisfy them. Failure BLOCKS phase exit or REDIRECTS to recovery. |
+| `andrej-karpathy-skills` is not installed | PRForge MUST use its built-in `policies/coding-discipline.md` fallback. The fallback enforces the same behavioral requirements. Absence of the external plugin MUST NOT weaken PRForge enforcement. |
+
+**Mandatory gates:**
+- PLAN cannot complete unless `coding_discipline.md` exists and is satisfied.
+- IMPLEMENT cannot complete unless changed files comply with the discipline contract.
+- SELF_REVIEW cannot complete unless the discipline audit passes.
+- PACKAGE cannot produce `approval.md` unless the discipline verdict is PASS or WARNING with justification.
+- APPROVAL cannot proceed if discipline status is BLOCKED.
+
+**For distributed mesh:**
+- Workers submit `discipline_report.json` with every job.
+- Coordinator/auditor rejects or requeues work if the report is missing, stale, or BLOCKED.
+- The external plugin is NOT the source of truth; PRForge artifacts are the source of truth.
+
+**The discipline rules (whether from companion plugin or built-in fallback) enforce:**
+- Think before coding; state assumptions and success criteria.
+- Prefer simplicity; the smallest correct fix over architectural cleanup.
+- Make surgical changes; avoid wide refactoring unrelated code.
+- Keep changes goal-driven; every edited line must map to the task.
+
+---
 
 ### Task Types & Modes
 
@@ -709,4 +740,4 @@ are not already occupied.
 
 ## Version
 
-v1.2.0 — Distributed mesh with Manager Mode (certify_only, internal_actions, low_risk_public), monitors (local-watch, distributed-worker-watch, distributed-coordinator-watch), mesh_signing for artifact verification, and complete architectural documentation. Includes Coordinator, Auditor, Worker, Manager, Policy Engine, Intel Engine, DB Backend, and Redis Backend components. Expanded hook coverage with phase-boundary and phase-injector hooks. Previous features (v1.1.0): Candidate discovery, tamper-proof DoD with evidence cross-reference, plan compliance, distributed mesh MVP, and GitHub intelligence hooks.
+v1.2.1 — Coding discipline enforcement integrated as mandatory phase gates. Companion plugin `andrej-karpathy-skills` is optional to install, but if present its rules become mandatory PRForge gates (think before coding, simplicity first, surgical changes, goal-driven execution). Built-in fallback `policies/coding-discipline.md` enforces the same behavior when the external plugin is absent. Added deterministic `discipline-check` hook (PostToolUse on Write/Edit/MultiEdit) writing `discipline_report.json`. Updated plugin manifest with `"hooks"` key in `plugin.json`, fixed sync script to place `plugin.json` at plugin root (not `.claude-plugin/`). Synced to all OR1/OR2/OR3 profiles. Previous (v1.2.0): Distributed mesh with Manager Mode, monitors, mesh_signing, expanded hook coverage. v1.1.0: Candidate discovery, tamper-proof DoD, plan compliance, distributed mesh MVP.
