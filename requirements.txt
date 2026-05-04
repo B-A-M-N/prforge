@@ -1,5 +1,10 @@
-# PRForge — pip dependencies for distributed mesh mode only
-# Standalone mode requires no pip packages.
+# PRForge — pip dependencies for distributed mesh mode
+# Core runtime (built-in, no pip install needed):
+#   - sqlite3: used in BOTH local and distributed modes (different roles per mode)
+#       * Local mode: primary metadata store (~/.prforge-intel/index/metadata.sqlite)
+#       * Distributed mode: node-local intel cache + mesh coordination state
+#   - Standalone / local mode requires ZERO pip packages.
+#   - db_backend.py auto-creates SQLite database files.
 
 # Redis backend (required for distributed mesh)
 redis>=4.6.0
