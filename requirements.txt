@@ -1,2 +1,12 @@
+# PRForge — pip dependencies for distributed mesh mode only
+# Standalone mode requires no pip packages.
+
+# Redis backend (required for distributed mesh)
 redis>=4.6.0
+
+# Intel Engine (required for distributed mesh with risk signal detection)
 fastembed>=0.5.0
+
+# Install:
+#   pip install -r requirements.txt
+#   (only needed for distributed mesh mode)

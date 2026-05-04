@@ -665,6 +665,64 @@ Approve / Request changes / Stop
 Only the actions in the checked `Approval covers` boxes are executed. Nothing else.
 
 ---
+---
+
+## Installation
+
+**Prerequisites:**
+- [Claude Code](https://claude.ai/code) installed and authenticated
+- `gh` CLI authenticated (`gh auth login`)
+- Bash (for hook scripts)
+- Git
+
+**Standalone mode (no pip packages required):**
+```bash
+# 1. Clone or copy PRForge onto your machine
+git clone https://github.com/<your-username>/prforge.git
+# or download and extract the folder
+
+# 2. Register as a local Claude Code plugin
+#    In your Claude Code session:
+/plugin install /path/to/prforge
+
+# 3. Enable it
+/plugin enable prforge@local
+
+# 4. Verify hooks are loaded (new session required)
+#    Start a session in any repo:
+#    /pr https://github.com/org/repo/issues/123
+```
+
+**Distributed mesh mode (requires additional packages):**
+```bash
+# Install pip dependencies (Redis + fastembed for mesh intel)
+pip install -r requirements.txt
+
+# Set up Redis on coordinator machine
+#   bind 127.0.0.1, requirepass set, appendonly yes
+
+# Then follow: /pr-distributed <role>  (see Distributed Setup section)
+```
+
+**Verify it works:**
+```bash
+# Start a fresh Claude Code session in a repo
+cd /path/to/some-repo
+claude
+
+# In the session, the plugin should auto-activate on:
+#   /pr <issue-or-PR-url>
+#   Pasting a GitHub issue/PR URL
+#   "find PR candidates in org/repo"
+```
+
+**requirements.txt** lists packages for distributed mesh only:
+- `redis>=4.6.0` — Redis Python client
+- `fastembed>=0.5.0` — Embeddings + reranking for Intel Engine
+
+Standalone PRForge needs **zero pip packages**.
+
+---
 
 ## Failure Mode Guards
 

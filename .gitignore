@@ -1,12 +1,22 @@
+# Node
 node_modules/
+dist/
+build/
+*.egg-info/
+
+# Python
 __pycache__/
 *.pyc
+*.pyo
+*.egg-info/
+*.egg/
 .DS_Store
+
+# PRForge runtime
 .remember/
-.claude/handshake/
 .prforge/
 .gemini_security/
-conductor/
+.serena/
 
 # IDE
 .idea/
@@ -23,11 +33,6 @@ conductor/
 # OS
 Thumbs.db
 
-# Build/dist
-dist/
-build/
-*.egg-info/
-
-# Misc
+# Temp/tooling
 =*
-.serena/
+conductor/
