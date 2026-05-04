@@ -176,6 +176,26 @@ Waits for your selection. Does not auto-pick. After selection, transitions to th
 
 PRForge operates in two modes: **Standalone** and **Distributed Mesh**.
 
+### Standalone Architecture
+
+```mermaid
+graph LR
+    U[User] -->|"/pr link" / paste URL| CC[Claude Code<br/>PRForge Skill]
+    CC --> PH[Phase State Machine]
+    PH -->|1| I[INTAKE<br/>Normalize input]
+    PH -->|2| INV[INVESTIGATE<br/>Repo intelligence]
+    PH -->|3| PL[PLAN<br/>Contract + DoD]
+    PH -->|4| IM[IMPLEMENT<br/>Edit + test]
+    PH -->|5| V[VALIDATE<br/>Run & record]
+    PH -->|6| SR[SELF_REVIEW<br/>Hostile audit]
+    PH -->|7| PK[PACKAGE<br/>Generate artifacts]
+    PH -->|8| AP[APPROVAL<br/>Wait for user]
+    AP -->|User approves| S[SHIPPED<br/>Push/Post/PR]
+    CC -->|PreToolUse| HL[Hooks<br/>preflight / phase-boundary]
+    CC -->|PostToolUse| IG[Intelligence<br/>GitNexus / gh CLI]
+    CC -->|PostToolUse| BR[Blast Radius<br/>scope tracking]
+```
+
 ### Standalone Components
 
 ```
@@ -188,10 +208,11 @@ PRForge Standalone = 1 skill + Core commands + 4 hooks
 | **Commands** | `commands/` | `/pr`, `/pr-continue`, `/pr-approve`, etc. |
 | **PreToolUse Hook** | `hooks/preflight.sh` | Fires before every `Bash` call; blocks unsafe git push/PR actions; enforces guards at the shell level independent of the skill |
 | **PostToolUse Hook (Read)** | `hooks/gitnexus-intelligence.sh` | Fires after every Read/Grep/Glob; cache-aware; auto-discovers MCP servers; writes tool instructions to `repo_intelligence.md`; records capability gaps |
-| **PostToolUse Hook (Write)** | `hooks/blast-radius.sh` | Fires after every Write/Edit; computes blast radius (files changed vs contract, test coverage ratio, dependency depth, public API surface); updates `state.json` |
+| **PostToolUse Hook (Write/Edit)** | `hooks/blast-radius.sh` | Fires after every Write/Edit; computes blast radius (files changed vs contract, test coverage ratio, dependency depth, public API surface); updates `state.json` |
+| **PostToolUse Hook (Write/Edit)** | `hooks/phase-injector.sh` | Fires after state.json writes; injects mandatory reminder to read the new phase playbook |
+| **PreToolUse Hook (Write)** | `hooks/phase-boundary.sh` | Fires before every Write; blocks illegal phase transitions in `state.json` |
 | **Pre-Commit Hook** | `hooks/pre-commit.sh` | Auto-installed in Phase 0; blocks staged `.prforge/` artifacts and debug files |
 | **Commit-Msg Hook** | `hooks/commit-msg.sh` | Auto-installed in Phase 0; blocks AI co-author trailers, AI-generated footers, WIP/debug/temp commit names |
-| **Intel Engine** | `scripts/mesh/intel_engine.py` | RAG-based fastembed system to detect subtle risk signals from artifacts |
 
 ### Distributed Mesh Components (MVP)
 
@@ -202,7 +223,12 @@ A distributed wrapper around standalone PRForge that coordinates work across mul
 | **Coordinator** | `scripts/mesh/coordinator.py` | Dispatch loop: node discovery, lease acquire, job assignment |
 | **Auditor** | `scripts/mesh/auditor.py` | GitHub polling loop: PR detection, cursor tracking, job enqueue |
 | **Worker** | `scripts/mesh/worker.py` | Heartbeat loop: inbox write, phase reporting, lease renewal |
-| **Policy Engine** | `scripts/mesh/policy_engine.py`| Deterministic + adaptive policy decision engine |
+| **Manager** | `scripts/mesh/manager.py` | Manager Mode: certification, authority gating, public action control |
+| **Policy Engine** | `scripts/mesh/policy_engine.py` | Deterministic + adaptive policy decision engine |
+| **Intel Engine** | `scripts/mesh/intel_engine.py` | RAG-based fastembed system to detect subtle risk signals from artifacts |
+| **Mesh Signing** | `scripts/mesh/mesh_signing.py` | HMAC-SHA256 artifact signing and verification for distributed mode |
+| **DB Backend** | `scripts/mesh/db_backend.py` | Database abstraction for mesh state persistence |
+| **Redis Backend** | `scripts/mesh/redis_backend.py` | Redis Streams job queue, heartbeats, leases, and state |
 
 #### Distributed CLI Agent Model
 
@@ -215,6 +241,73 @@ Distributed Mesh mode is not a hidden worker pool and does not spawn invisible L
 | PC3 | Forge Worker B | Yes, within contract | Execute assigned PRForge implementation/review-response/CI-fix jobs |
 
 The Python mesh daemons manage Redis streams, node discovery, leases, heartbeats, inbox/outbox files, queue state, and schema validation. They do not replace the visible Claude Code agents. Semantic work is performed by the role-loaded Claude Code CLI agent on that machine. The canonical job payload lives in Redis and/or the local mesh inbox. PTY nudging may be used only to wake a visible CLI session and tell it that a job is available. PTY text is never the source of truth for a job.
+
+### Distributed Architecture (3 PCs, 1 Claude Code instance each)
+
+```mermaid
+graph LR
+    subgraph PC1 ["PC1 — Coordinator / Auditor (Claude Code)"]
+        C[coordinator.py<br/>Dispatch loop]
+        A[auditor.py<br/>GitHub polling]
+        M[manager.py<br/>Certification]
+    end
+
+    subgraph PC2 ["PC2 — Worker A (Claude Code)"]
+        W1[worker.py<br/>Heartbeat + inbox]
+    end
+
+    subgraph PC3 ["PC3 — Worker B (Claude Code)"]
+        W2[worker.py<br/>Heartbeat + inbox]
+    end
+
+    R[("Redis<br/>Streams + Leases<br/>Heartbeats + Queue")]
+
+    A -->|"poll GitHub"| GH[GitHub API]
+    A -->|"enqueue job"| R
+    C -->|"dispatch"| R
+    C -->|"assign job"| W1
+    C -->|"assign job"| W2
+    W1 -->|"lease + status"| R
+    W2 -->|"lease + status"| R
+    W1 -->|"submit artifacts"| R
+    W2 -->|"submit artifacts"| R
+    C -->|"audit"| A
+    C -->|"certify"| M
+    M -->|"verdict"| C
+    C -->|"revision / approval"| W1
+    C -->|"revision / approval"| W2
+```
+
+Job flow:
+1. **PC1 (Coordinator/Auditor)** — Claude Code runs `prforge` skill in coordinator/auditor mode. `auditor.py` polls GitHub, enqueues jobs to Redis. `coordinator.py` dispatches jobs to workers. `manager.py` certifies completed work.
+2. **PC2 (Worker A)** — Claude Code runs `prforge` skill in worker mode. `worker.py` picks up jobs from Redis, executes full PRForge pipeline (INTAKE→…→APPROVAL), submits artifacts.
+3. **PC3 (Worker B)** — Same as PC2. Runs independent Claude Code worker session.
+
+All inter-machine coordination goes through **Redis** (Streams, leases, heartbeats, job queue). Python daemons handle the plumbing; Claude Code agents handle the semantic work.
+
+### Monitors
+
+PRForge uses background monitors to watch session and mesh state. Monitors are declared in `monitors/monitors.json` and auto-start when the `prforge` skill is invoked.
+
+| Monitor | Location | Purpose |
+|---------|----------|---------|
+| **local-watch** | `monitors/local-watch.sh` | Consistency sentinel: git drift, dirty worktree, review updates, approval integrity, branch upstream, hook health, context pressure |
+| **distributed-worker-watch** | `monitors/distributed-worker-watch.sh` | Worker state: assigned jobs, lease renewal, coordinator directives, revision jobs |
+| **distributed-coordinator-watch** | `monitors/distributed-coordinator-watch.sh` | Coordinator state: worker heartbeats, queue depth, stale leases, signoff state, auditor verdicts, reviewer dispatch |
+
+Monitors emit `PRFORGE_EVENT` notifications classified as `INFO`, `WARNING`, or `BLOCKER`. See SKILL.md for the full event classification table.
+
+### Manager Mode (Distributed)
+
+When Manager Mode is enabled in distributed mesh, an additional policy layer governs what actions can execute automatically:
+
+| Authority Level | Public Actions Allowed |
+|----------------|------------------------|
+| `certify_only` | None — may only certify/notify, no public actions |
+| `internal_actions` | None — may requeue/block/revalidate/release leases/certify, no public actions |
+| `low_risk_public` | `push`, `comment`, `request_review` only (never `force_push`, `merge`, `delete_branch`) |
+
+Manager Mode requires all verdicts: `coordinator_verdict.json`, `auditor_verdict.json`, `manager_verdict.json`. For `low_risk_public`, `mesh_certification.json` is also required and its hashes are verified against current state.
 
 ### Hook-Driven Automation
 
@@ -256,6 +349,83 @@ Results feed into the scope delta check, SELF_REVIEW gates, and approval status 
 
 ---
 
+## Distributed Setup
+
+PRForge Mesh uses **Redis** as its coordination plane (job queue, leases, heartbeats, state). Workers connect to the coordinator-hosted Redis over an **SSH tunnel** — this is just the secure network path; Redis remains the coordination plane.
+
+### Prerequisites per machine
+
+| Machine | Prerequisites |
+|---------|---------------|
+| **PC1 (Coordinator/Auditor)** | Redis running locally (bind 127.0.0.1, requirepass set, appendonly yes), `gh` CLI authenticated, Python + redis-py + fastembed |
+| **PC2 / PC3 (Workers)** | SSH access to PC1 (`ssh user@coordinator-host`), Python + redis-py + fastembed, `gh` CLI authenticated, repo roots |
+
+### Step 1 — Set up PC1 (Coordinator / Auditor)
+
+```
+/pr-distributed coordinator,auditor
+```
+
+This creates:
+- `~/.prforge-mesh/config.json` (Redis local, roles: coordinator + auditor)
+- `~/.prforge-mesh/mesh.env`
+- systemd services: `prforge-coordinator.service`, `prforge-auditor.service`
+
+Then start:
+```bash
+systemctl --user enable --now prforge-coordinator.service
+systemctl --user enable --now prforge-auditor.service
+```
+
+Verify Redis is running with `requirepass` in `/etc/redis/redis.conf`:
+```
+bind 127.0.0.1
+protected-mode yes
+requirepass <your-password>
+appendonly yes
+```
+
+### Step 2 — Set up PC2 / PC3 (Workers)
+
+```
+/pr-distributed worker
+```
+
+This creates:
+- `~/.prforge-mesh/config.json` (Redis URL via SSH tunnel)
+- `~/.prforge-mesh/mesh.env`
+- `~/.config/systemd/user/prforge-redis-tunnel.service` (SSH tunnel to PC1)
+- `~/.config/systemd/user/prforge-worker.service`
+
+Then start:
+```bash
+systemctl --user enable --now prforge-redis-tunnel.service
+systemctl --user enable --now prforge-worker.service
+```
+
+The SSH tunnel (`prforge-redis-tunnel.service`) maps local port `6380` to `127.0.0.1:6379` on PC1, so the worker's Redis client connects securely to the coordinator's Redis.
+
+### Step 3 — Enable Manager Mode (optional)
+
+After setup, enable the policy layer on PC1:
+```
+/pr-distributed manager-mode low-risk-public
+```
+
+| Authority | What it allows |
+|-----------|----------------|
+| `certify-only` | Certify/notify only, no public actions |
+| `internal-actions` | Requeue/block/revalidate, no public actions |
+| `low-risk-public` | Push, comment, request_review (never force_push, merge, delete_branch) |
+
+### Step 4 — Check status
+
+```
+/pr-distributed status
+```
+
+---
+
 ## Command Surface
 
 Core commands for the agent:
@@ -265,7 +435,8 @@ Core commands for the agent:
 | `/pr <link-or-task>` | Start the full workflow. Handles everything through to the approval gate. |
 | `/pr-continue` | Resume after a blocker, failed validation, or interrupted run. |
 | `/pr-approve` | Verify all integrity hashes, then execute the approved action. |
-| `/pr-distributed` | Handle distributed Mesh workloads (Coordinator/Worker dispatch). |
+| `/pr-distributed <role>` | Set up distributed Mesh role: `worker`, `coordinator`, `auditor`, `coordinator,auditor` |
+| `/pr-distributed manager-mode <sub>` | Set Manager Mode: `off`, `certify-only`, `internal-actions`, `low-risk-public` |
 | `/pr-mesh-status` | Display the current status of the PRForge Mesh nodes and queues. |
 | `/pr-rollback` | Safely rollback a PRForge operation. |
 
@@ -538,4 +709,4 @@ are not already occupied.
 
 ## Version
 
-v1.2.0 — Introduces PRForge Mesh MVP for distributed orchestration across multiple machines via Redis Streams. Adds Coordinator, Auditor, and Worker node roles. Integrates Intel Engine (RAG-based risk signaling via fastembed) and Policy Engine for adaptive capability envelopes. Expands command surface to include `/pr-distributed`, `/pr-mesh-status`, and `/pr-rollback`. Maintains 100% compatibility with the standalone PRForge local workflow. Previous features (v1.1.0): Candidate discovery, tamper-proof DoD, plan compliance, and GitHub intelligence hooks.
+v1.2.0 — Distributed mesh with Manager Mode (certify_only, internal_actions, low_risk_public), monitors (local-watch, distributed-worker-watch, distributed-coordinator-watch), mesh_signing for artifact verification, and complete architectural documentation. Includes Coordinator, Auditor, Worker, Manager, Policy Engine, Intel Engine, DB Backend, and Redis Backend components. Expanded hook coverage with phase-boundary and phase-injector hooks. Previous features (v1.1.0): Candidate discovery, tamper-proof DoD with evidence cross-reference, plan compliance, distributed mesh MVP, and GitHub intelligence hooks.
