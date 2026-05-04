@@ -1,0 +1,42 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PRForge Mesh Certification",
+  "description": "Schema for .prforge/mesh/mesh_certification.json — final certification binding manager verdict to artifact hashes",
+  "type": "object",
+  "required": ["decision", "authority", "timestamp", "hashes", "all_criteria_pass"],
+  "additionalProperties": false,
+  "properties": {
+    "decision": {
+      "type": "string",
+      "enum": ["manager_certified", "manager_requeue", "manager_blocked", "manager_escalate", "manager_auto_ship_allowed"]
+    },
+    "authority": {
+      "type": "string",
+      "enum": ["certify_only", "internal_actions", "low_risk_public"]
+    },
+    "timestamp": { "type": "string" },
+    "all_criteria_pass": { "type": "boolean" },
+    "hashes": {
+      "type": "object",
+      "required": ["coordinator_verdict", "auditor_verdict", "diff"],
+      "properties": {
+        "coordinator_verdict": {
+          "type": "string",
+          "description": "SHA256 of coordinator_verdict.json at time of certification"
+        },
+        "auditor_verdict": {
+          "type": "string",
+          "description": "SHA256 of auditor_verdict.json at time of certification"
+        },
+        "diff": {
+          "type": "string",
+          "description": "SHA256 of git diff --stat + git diff --cached --stat at time of certification"
+        }
+      }
+    },
+    "_signature": {
+      "type": "string",
+      "description": "HMAC-SHA256 hex digest of canonical JSON (excludes _signature field)"
+    }
+  }
+}

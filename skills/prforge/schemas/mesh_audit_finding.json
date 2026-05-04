@@ -1,0 +1,81 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PRForge Mesh Audit Finding",
+  "description": "Schema for .prforge/audits/audit_findings.json produced by audit_only mode",
+  "type": "object",
+  "required": ["repo", "pr_number", "audit_type", "severity", "findings", "queue_recommendation"],
+  "additionalProperties": false,
+  "properties": {
+    "repo": { "type": "string", "pattern": "^[^/]+/[^/]+$" },
+    "pr_number": { "type": "integer", "minimum": 1 },
+    "head_sha": { "type": "string" },
+    "audited_at": { "type": "string" },
+    "audit_type": {
+      "type": "string",
+      "enum": [
+        "pre_review_quality_audit",
+        "review_freshness_audit",
+        "approval_artifact_audit",
+        "ci_relatedness_audit"
+      ]
+    },
+    "severity": {
+      "type": "string",
+      "enum": ["none", "low", "medium", "high", "blocker"]
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "type", "severity", "summary", "recommended_job"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "type": {
+            "type": "string",
+            "enum": [
+              "missing_test",
+              "scope_creep",
+              "stale_approval",
+              "branch_drift",
+              "maintainer_objection_risk",
+              "related_ci_failure",
+              "unclear_validation",
+              "weak_pr_body",
+              "nit"
+            ]
+          },
+          "severity": {
+            "type": "string",
+            "enum": ["low", "medium", "high", "blocker"]
+          },
+          "summary": { "type": "string", "minLength": 1 },
+          "evidence": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "recommended_job": {
+            "type": "string",
+            "enum": ["none", "pr_polish", "review_response", "ci_fix_related_to_branch"]
+          }
+        }
+      }
+    },
+    "queue_recommendation": {
+      "type": "object",
+      "required": ["create_job", "job_type", "priority"],
+      "additionalProperties": false,
+      "properties": {
+        "create_job": { "type": "boolean" },
+        "job_type": {
+          "type": "string",
+          "enum": ["none", "pr_polish", "review_response", "ci_fix_related_to_branch"]
+        },
+        "priority": {
+          "type": "string",
+          "enum": ["P0", "P1", "P2", "P3", "P4"]
+        }
+      }
+    }
+  }
+}

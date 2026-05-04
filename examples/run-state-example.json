@@ -1,0 +1,126 @@
+{
+  "version": "1.0",
+  "phase": "APPROVAL",
+  "repo": {
+    "local_path": "/home/bamn/qwen-code",
+    "github": "B-A-M-N/qwen-code",
+    "base_branch": "main",
+    "working_branch": "fix/model-timeout-oauth-path",
+    "origin": "origin",
+    "upstream": "upstream"
+  },
+  "task": {
+    "type": "review_response",
+    "source_url": "https://github.com/B-A-M-N/qwen-code/pull/42#discussion_r...",
+    "objective": "Address maintainer review comments on timeout override PR",
+    "required_items": [
+      { "id": "R1", "description": "Fix timeout override not applying to OAuth path", "kind": "code_change", "status": "complete" },
+      { "id": "R2", "description": "Remove unrelated helper refactor", "kind": "scope_reduction", "status": "complete" },
+      { "id": "R3", "description": "Add OAuth timeout regression test", "kind": "test", "status": "complete" }
+    ],
+    "optional_items": []
+  },
+  "permissions": {
+    "may_edit": true, "may_run_tests": true, "may_commit": true,
+    "may_push": false, "may_post_comments": false, "may_force_push": false, "may_create_pr": false
+  },
+  "scope": {
+    "allowed_files": [
+      "packages/core/src/config/provider.ts",
+      "packages/core/src/config/types.ts",
+      "packages/core/test/config/provider.test.ts"
+    ],
+    "delta_check": {
+      "contract_files": ["packages/core/src/config/provider.ts", "packages/core/src/config/types.ts", "packages/core/test/config/provider.test.ts"],
+      "actual_changed_files": ["packages/core/src/config/provider.ts", "packages/core/test/config/provider.test.ts"],
+      "unexpected_files": [],
+      "scope_clean": true
+    }
+  },
+  "validation": {
+    "commands_run": [
+      { "command": "npm test -- packages/core/test/config/provider.test.ts", "status": "passed", "evidence": "14 tests passed", "related_to_changes": true },
+      { "command": "npm run typecheck", "status": "passed", "evidence": "passed", "related_to_changes": true }
+    ],
+    "commands_not_run": [
+      { "command": "full CI", "reason": "unavailable locally" }
+    ],
+    "touched_area_failed": false
+  },
+  "intelligence": {
+    "mode": "degraded_gh",
+    "gitnexus_available": false,
+    "gh_available": true,
+    "mcp_gitnexus": false,
+    "mcp_github": false,
+    "mcp_firecrawl": false,
+    "mcp_context_mode": true,
+    "disclosure": "GitNexus unavailable. Could not inspect prior semantic relationships or historical similar PRs. Fallback: rg, git log, gh PR search. Risk impact: Medium.",
+    "unavailable_capabilities": ["prior_PR_analysis", "semantic_search", "maintainer_history", "github_mcp_pr_reviews", "github_mcp_ci_checks"],
+    "minimum_risk_floor": "medium"
+  },
+  "github_user": "bamn",
+  "ownership": {
+    "pr_author": "bamn",
+    "branch_head_repo": "B-A-M-N/qwen-code",
+    "is_own_pr": true,
+    "ambiguous": false,
+    "resolution": "confirmed_user"
+  },
+  "review_freshness": {
+    "last_fetched_at": "2026-05-02T14:30:00Z",
+    "comments_at_fetch": 5,
+    "new_comments_since_fetch": 0,
+    "new_check_failures_since_fetch": 0,
+    "fresh": true
+  },
+  "ci_status": {
+    "overall": "passed",
+    "failed_checks": [],
+    "checked_at": "2026-05-02T14:30:00Z"
+  },
+  "branch_status": {
+    "base_current": true,
+    "base_behind_commits": 0,
+    "ahead_of_base_commits": 3,
+    "drift_status": "base_current",
+    "checked_at": "2026-05-02T14:30:00Z"
+  },
+  "commit_hygiene": {
+    "checked": true,
+    "clean": true,
+    "violations": []
+  },
+  "artifact_exclusion": {
+    "checked": true,
+    "clean": true,
+    "staged_artifacts": [],
+    "tracked_artifacts": []
+  },
+  "release": {
+    "ready": true,
+    "requires_user_approval": true,
+    "approval_status": "READY_TO_SHIP",
+    "blocking_reasons": [],
+    "warning_reasons": [],
+    "suggested_actions": [
+      { "action": "force_push", "command": "git push --force-with-lease origin fix/model-timeout-oauth-path", "description": "Push updated branch to fork" },
+      { "action": "post_comment", "command": "gh api repos/B-A-M-N/qwen-code/pulls/42/comments --field body=\"Thanks, agreed...\"", "description": "Post maintainer response to PR #42" }
+    ]
+  },
+  "public_text": {
+    "review_response": "Thanks, agreed. I traced the timeout override through the OAuth construction path and found it was only applied after the early provider return. I moved the resolution earlier and added OAuth-specific regression coverage. I also removed the unrelated helper refactor from the earlier revision to keep the PR scoped to the timeout override behavior.",
+    "pr_body_update": null
+  },
+  "approval": {
+    "approval_id": "2026-05-02T14:35:00Z",
+    "approved_at": "2026-05-02T14:35:00Z",
+    "approved_actions": ["force_push", "post_comment"],
+    "diff_hash": "a1b2c3d4...",
+    "validation_hash": "f6e5d4c3...",
+    "approval_md_hash": "1a2b3c4d...",
+    "stale": false
+  },
+  "started_at": "2026-05-01T12:00:00Z",
+  "last_updated": "2026-05-02T14:35:00Z"
+}

@@ -1,0 +1,28 @@
+{
+  "_comment": "Base state schema — required in all modes. Merge with mode schema at PLAN time.",
+  "required_at_intake": ["pr", "repo", "branch", "task", "phase", "github_user", "git_identity"],
+  "required_at_plan": ["contract", "dod", "patch_plan", "blast_radius"],
+  "required_at_validate": ["validation", "ci_status"],
+  "required_at_self_review": ["scope", "artifact_exclusion", "branch_status"],
+  "required_at_package": ["review_freshness", "release"],
+  "required_at_approval": ["approval"],
+  "field_definitions": {
+    "pr": "integer — PR number being worked on",
+    "repo": "string — owner/repo format",
+    "branch": "string — working branch name (must not be main/master)",
+    "task": "string — task type: review_response|new_pr|candidate_discovery|pr_polish|ci_fix|local_task",
+    "phase": "string — current phase name",
+    "github_user": "string — gh api user login",
+    "git_identity": {"name": "string", "email": "string", "configured": "boolean"},
+    "contract": {"objective": "string", "allowed_files": "array", "forbidden": "array", "validation_commands": "array"},
+    "dod": {"generation_hash": "string", "items_total": "integer", "items_checked": "integer", "evidence_verified": "boolean"},
+    "validation": {"touched_area_failed": "boolean", "commands_run": "array"},
+    "ci_status": {"overall": "string", "related": "array", "unrelated": "array"},
+    "scope": {"delta_check": {"scope_clean": "boolean", "unexpected_files": "array"}},
+    "artifact_exclusion": {"clean": "boolean"},
+    "branch_status": {"drift_status": "string", "base_branch": "string"},
+    "review_freshness": {"fresh": "boolean", "last_fetched_at": "string", "new_comments_since_fetch": "integer"},
+    "release": {"approval_status": "string", "blocking_reasons": "array", "warning_reasons": "array"},
+    "approval": {"approval_id": "string", "diff_hash": "string", "validation_hash": "string", "approval_md_hash": "string"}
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PRForge Policy Decision",
+  "description": "Output of prforge policy check.",
+  "type": "object",
+  "required": ["decision", "event", "phase", "checked_at"],
+  "additionalProperties": true,
+  "properties": {
+    "decision": {
+      "type": "string",
+      "enum": ["allow", "allow_with_warning", "allow_deterministic_checks_only", "redirect_recoverable", "escalate_auditor", "block_terminal"]
+    },
+    "redirect_state": { "type": "string" },
+    "reason": { "type": "string" },
+    "required_next_action": { "type": "string" },
+    "event": { "type": "string" },
+    "phase": { "type": "string" },
+    "run_dir": { "type": "string" },
+    "repo": { "type": "string" },
+    "deterministic_checks": { "type": "array", "items": { "type": "object" } },
+    "policy_bundle": { "type": "object" },
+    "intel": {
+      "type": "object",
+      "properties": {
+        "available": { "type": "boolean" },
+        "adaptive_enforcement": { "type": "boolean" },
+        "top_risks": { "type": "array", "items": { "type": "object" } },
+        "context_hash": { "type": "string" }
+      }
+    },
+    "fail_safe": { "type": "object" },
+    "checked_at": { "type": "string", "format": "date-time" }
+  }
+}

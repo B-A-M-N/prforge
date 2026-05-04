@@ -1,0 +1,2 @@
+redis>=4.6.0
+fastembed>=0.5.0

@@ -1,0 +1,30 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PRForge Policy Bundle",
+  "description": "Cached local capability envelope for one PRForge run. Mesh may issue it; worker may enforce it locally until expiry.",
+  "type": "object",
+  "required": ["policy_version", "job_id", "phase", "expires_at"],
+  "additionalProperties": true,
+  "properties": {
+    "policy_version": { "type": "string" },
+    "job_id": { "type": "string" },
+    "phase": { "type": "string" },
+    "allowed_files": { "type": "array", "items": { "type": "string" } },
+    "forbidden_actions": { "type": "array", "items": { "type": "string" } },
+    "allowed_local_actions": {
+      "type": "array",
+      "items": {
+        "enum": ["read", "search", "edit_approved_files", "run_tests", "update_notes", "resolve_local_redirects"]
+      }
+    },
+    "requires_mesh_reconnect": {
+      "type": "array",
+      "items": {
+        "enum": ["phase_exit", "contract_expansion", "approval_ready", "commit", "push", "gh_comment", "gh_pr_create", "queue_mutation", "lease_release", "completion"]
+      }
+    },
+    "risk_rules_hash": { "type": "string" },
+    "intel_context_hash": { "type": "string" },
+    "expires_at": { "type": "string", "format": "date-time" }
+  }
+}

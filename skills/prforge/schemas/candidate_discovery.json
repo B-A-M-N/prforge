@@ -1,0 +1,23 @@
+{
+  "_comment": "candidate_discovery mode schema. Merge with base.json at PLAN time.",
+  "required_at_intake": ["task"],
+  "required_at_investigate": ["candidate_discovery"],
+  "required_at_plan": ["candidate_discovery.status", "candidate_discovery.candidates"],
+  "required_before_pr_execution": ["candidate_discovery.selected_issue"],
+  "field_definitions": {
+    "task": {
+      "type": "string — must equal 'candidate_discovery'",
+      "repo": "string — owner/repo target to search for issues",
+      "selection_required": "boolean — must be true; a candidate must be selected before entering PR execution phases"
+    },
+    "candidate_discovery": {
+      "status": "enum: collecting | ranked | selected | blocked",
+      "candidates": "array of {issue_number, title, url, score, rationale} — scored and ranked issues",
+      "selected_issue": "object {issue_number, title, url, rationale} | null — null until user selects"
+    }
+  },
+  "transition_guards": {
+    "selected → PLAN": "candidate_discovery.selected_issue must be non-null and user must have confirmed selection",
+    "any → BLOCKED": "candidate_discovery.status must be set to 'blocked' with reason in state.blocked_reason"
+  }
+}

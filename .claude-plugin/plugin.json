@@ -1,0 +1,12 @@
+{
+  "name": "prforge",
+  "version": "1.1.0",
+  "description": "Professional PR contribution harness — delegated execution with guarded release. Forces repo intelligence, scope contracts, validation honesty, and git safety before any upstream-facing action. Includes optional distributed mesh mode.",
+  "author": {
+    "name": "BAMN",
+    "email": "bamn@live.com"
+  },
+  "commands": "./commands/",
+  "skills": "./skills/",
+  "monitors": "./monitors/monitors.json"
+}

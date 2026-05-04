@@ -1,0 +1,158 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PRForge Mesh Config",
+  "description": "Schema for ~/.prforge-mesh/config.json",
+  "type": "object",
+  "required": ["mesh", "limits"],
+  "additionalProperties": false,
+  "properties": {
+    "mesh": {
+      "type": "object",
+      "required": ["enabled", "redis_url", "cluster_name", "node_id", "roles"],
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "redis_url": { "type": "string", "pattern": "^redis://" },
+        "cluster_name": { "type": "string", "minLength": 1 },
+        "node_id": { "type": "string", "minLength": 1 },
+        "roles": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "enum": ["worker", "coordinator", "auditor"] }
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "required": [
+        "max_active_worker_jobs",
+        "max_jobs_per_worker",
+        "lease_ttl_seconds",
+        "heartbeat_interval_seconds"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "max_active_worker_jobs": { "type": "integer", "minimum": 1, "maximum": 2 },
+        "max_jobs_per_worker": { "type": "integer", "minimum": 1, "maximum": 1 },
+        "lease_ttl_seconds": { "type": "integer", "minimum": 60 },
+        "heartbeat_interval_seconds": { "type": "integer", "minimum": 5 },
+        "max_requeues": { "type": "integer", "minimum": 1, "maximum": 10 }
+      }
+    },
+    "worker": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "capacity": { "type": "integer", "minimum": 0, "maximum": 1 },
+        "repo_roots": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "auto_launch_claude": { "type": "boolean" },
+        "launcher": { "type": "string" },
+        "allowed_modes": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "new_pr",
+              "review_response",
+              "pr_polish",
+              "ci_fix_related_to_branch"
+            ]
+          }
+        }
+      }
+    },
+    "auditor": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "lookback_days": { "type": "integer", "minimum": 1, "maximum": 7 },
+        "poll_interval_minutes": { "type": "integer", "minimum": 5 },
+        "audit_interval_minutes": { "type": "integer", "minimum": 15 },
+        "skip_if_unchanged": { "type": "boolean" },
+        "max_llm_audits_per_hour": { "type": "integer", "minimum": 0 },
+        "queue_medium_findings_only_when_idle": { "type": "boolean" }
+      }
+    },
+    "notifications": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "desktop": { "type": "boolean" },
+        "pubsub": { "type": "boolean" }
+      }
+    },
+    "redirect_budget": {
+      "type": "object",
+      "additionalProperties": { "type": "integer", "minimum": 0, "maximum": 20 },
+      "properties": {
+        "unexpected_file": { "type": "integer", "minimum": 1, "maximum": 10 },
+        "missing_state_sync": { "type": "integer", "minimum": 1, "maximum": 10 },
+        "phase_exit_without_report": { "type": "integer", "minimum": 1, "maximum": 10 },
+        "validation_failure": { "type": "integer", "minimum": 1, "maximum": 10 },
+        "contract_mismatch": { "type": "integer", "minimum": 1, "maximum": 10 },
+        "public_action_without_approval": { "type": "integer", "minimum": 1, "maximum": 3 }
+      }
+    },
+    "intel": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "global_index_path": { "type": "string" },
+        "local_cache_enabled": { "type": "boolean" },
+        "embedding_provider": {
+          "type": "string",
+          "enum": ["none", "fastembed", "openai", "local"]
+        },
+        "reranker_provider": {
+          "type": "string",
+          "enum": ["none", "local", "openai", "cohere"]
+        },
+        "high_risk_threshold": { "type": "number", "minimum": 0, "maximum": 1 },
+        "medium_risk_threshold": { "type": "number", "minimum": 0, "maximum": 1 },
+        "fail_safe_mode": {
+          "type": "string",
+          "enum": ["deterministic_only", "require_auditor_on_ambiguity"]
+        }
+      }
+    },
+    "manager_mode": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "authority": {
+          "type": "string",
+          "enum": ["off", "certify_only", "internal_actions", "low_risk_public"]
+        },
+        "require_coordinator_pass": { "type": "boolean" },
+        "require_auditor_pass": { "type": "boolean" },
+        "require_clean_validation": { "type": "boolean" },
+        "require_review_freshness": { "type": "boolean" },
+        "require_ci_relatedness_clean": { "type": "boolean" },
+        "require_no_unknown_ci_for_auto_ship": { "type": "boolean" },
+        "require_no_scope_delta": { "type": "boolean" },
+        "require_dod_evidence": { "type": "boolean" },
+        "require_artifact_exclusion": { "type": "boolean" },
+        "max_risk": {
+          "type": "string",
+          "enum": ["low", "medium", "high", "critical"]
+        },
+        "auto_requeue_on_fail": { "type": "boolean" },
+        "auto_certify_on_pass": { "type": "boolean" },
+        "auto_public_actions": { "type": "boolean" },
+        "allowed_public_actions": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "forbidden_public_actions": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    }
+  }
+}

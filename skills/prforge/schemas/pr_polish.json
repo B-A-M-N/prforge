@@ -1,0 +1,25 @@
+{
+  "_comment": "pr_polish mode schema. Merge with base.json at PLAN time.",
+  "required_at_intake": ["task", "polish"],
+  "required_at_investigate": ["polish.findings"],
+  "required_at_plan": ["polish.allowed_actions"],
+  "required_at_approval": ["polish.requires_approval"],
+  "field_definitions": {
+    "task": {
+      "type": "string — must equal 'pr_polish'",
+      "source_url": "string — GitHub PR URL being polished",
+      "repo": "string — owner/repo format"
+    },
+    "polish": {
+      "pr_number": "integer — PR number being polished",
+      "findings": "array of {id, category, description, severity, file, line} — issues found during investigation",
+      "allowed_actions": "array of strings — e.g. ['fix_typos', 'improve_test_coverage', 'clean_commit_message']. Populated at PLAN. No action outside this list.",
+      "requires_approval": "boolean — must be true; no public mutation without explicit user approval"
+    }
+  },
+  "transition_guards": {
+    "INVESTIGATE → PLAN": "polish.findings must be non-empty array (empty = nothing to polish = BLOCKED)",
+    "PACKAGE → APPROVAL": "polish.requires_approval must be true and approval.md must preview all proposed changes",
+    "APPROVAL → SHIPPED": "polish.allows_actions must match state.approval.approved_actions exactly"
+  }
+}

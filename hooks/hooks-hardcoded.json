@@ -1,0 +1,65 @@
+{
+  "description": "PRForge deterministic hooks (hardcoded paths — for profiles where CLAUDE_PLUGIN_ROOT is not set)",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "description": "PRForge Bash safety gate — blocks unsafe git push/PR actions before they run",
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"/home/bamn/prforge/hooks/preflight.sh\"",
+            "timeout": 8
+          }
+        ]
+      },
+      {
+        "description": "PRForge phase boundary enforcer — blocks illegal phase transitions in state.json writes",
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"/home/bamn/prforge/hooks/phase-boundary.sh\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "description": "PRForge GitNexus intelligence — prompts intelligence gathering after read operations when state is active",
+        "matcher": "Read|Grep|Glob",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"/home/bamn/prforge/hooks/gitnexus-intelligence.sh\"",
+            "timeout": 15
+          }
+        ]
+      },
+      {
+        "description": "PRForge blast radius tracker — computes blast radius after file edits",
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"/home/bamn/prforge/hooks/blast-radius.sh\"",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "description": "PRForge phase injector — after state.json writes, injects mandatory reminder to read the new phase playbook",
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"/home/bamn/prforge/hooks/phase-injector.sh\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  },
+  "_install_note": "Hardcoded paths variant — used when CLAUDE_PLUGIN_ROOT is not injected. Paths point to /home/bamn/prforge/hooks/."
+}

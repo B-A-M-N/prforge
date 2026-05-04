@@ -1,0 +1,65 @@
+{
+  "description": "PRForge deterministic hooks",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "description": "PRForge Bash safety gate — blocks unsafe git push/PR actions before they run",
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/preflight.sh\"",
+            "timeout": 8
+          }
+        ]
+      },
+      {
+        "description": "PRForge phase boundary enforcer — blocks illegal phase transitions in state.json writes",
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/phase-boundary.sh\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "description": "PRForge GitNexus intelligence — prompts intelligence gathering after read operations when state is active",
+        "matcher": "Read|Grep|Glob",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/gitnexus-intelligence.sh\"",
+            "timeout": 15
+          }
+        ]
+      },
+      {
+        "description": "PRForge blast radius tracker — computes blast radius after file edits",
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/blast-radius.sh\"",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "description": "PRForge phase injector — after state.json writes, injects mandatory reminder to read the new phase playbook",
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/phase-injector.sh\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  },
+  "_install_note": "CLAUDE_PLUGIN_ROOT must resolve to the prforge plugin directory (containing this hooks/ folder). Verify with: echo ${CLAUDE_PLUGIN_ROOT}. If hooks silently fail, check this path first."
+}

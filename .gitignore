@@ -1,0 +1,33 @@
+node_modules/
+__pycache__/
+*.pyc
+.DS_Store
+.remember/
+.claude/handshake/
+.prforge/
+.gemini_security/
+conductor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# OS
+Thumbs.db
+
+# Build/dist
+dist/
+build/
+*.egg-info/
+
+# Misc
+=*
+.serena/

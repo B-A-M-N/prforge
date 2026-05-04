@@ -1,0 +1,358 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "PRForge run state — tracks the current PR contribution session",
+  "type": "object",
+  "required": ["version", "phase", "repo", "task", "permissions", "started_at"],
+  "properties": {
+    "version": { "type": "string", "const": "1.0" },
+    "phase": {
+      "type": "string",
+      "enum": ["INTAKE", "INVESTIGATE", "PLAN", "IMPLEMENT",
+               "VALIDATE", "SELF_REVIEW", "PACKAGE", "APPROVAL",
+               "SHIPPED", "ABORTED", "BLOCKED",
+               "SCOPE_RECONCILE", "STATE_SYNC_REPAIR",
+               "LEASE_RENEWAL_REPAIR", "REVIEW_REFRESH",
+               "CONTRACT_UPDATE", "PLAN_UPDATE",
+               "VALIDATION_REPAIR", "INTELLIGENCE_REPAIR", "ARTIFACT_REPAIR",
+               "COORDINATOR_RECONCILE"]
+    },
+    "repo": {
+      "type": "object",
+      "required": ["local_path", "base_branch", "working_branch"],
+      "properties": {
+        "local_path": { "type": "string" },
+        "github": { "type": "string" },
+        "base_branch": { "type": "string" },
+        "working_branch": { "type": "string" },
+        "origin": { "type": "string" },
+        "upstream": { "type": "string" }
+      }
+    },
+    "task": {
+      "type": "object",
+      "required": ["type", "objective"],
+      "properties": {
+        "type": { "type": "string", "enum": ["new_pr", "review_response", "issue_fix", "local_task", "ci_fix", "candidate_discovery", "pr_polish"] },
+        "source_url": { "type": "string" },
+        "objective": { "type": "string" },
+        "required_items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "description": { "type": "string" },
+              "kind": { "type": "string", "enum": ["code_change", "scope_reduction", "validation", "docs", "test"] },
+              "status": { "type": "string", "enum": ["pending", "in_progress", "complete", "skipped"] }
+            }
+          }
+        },
+        "optional_items": { "type": "array", "items": { "type": "object" } }
+      }
+    },
+    "permissions": {
+      "type": "object",
+      "properties": {
+        "may_edit": { "type": "boolean" },
+        "may_run_tests": { "type": "boolean" },
+        "may_commit": { "type": "boolean" },
+        "may_push": { "type": "boolean" },
+        "may_post_comments": { "type": "boolean" },
+        "may_force_push": { "type": "boolean" },
+        "may_create_pr": { "type": "boolean" }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "properties": {
+        "allowed_files": { "type": "array", "items": { "type": "string" } },
+        "forbidden_files": { "type": "array", "items": { "type": "string" } },
+        "forbidden_actions": { "type": "array", "items": { "type": "string" } },
+        "delta_check": {
+          "type": "object",
+          "description": "Guard #7: contract-vs-diff scope delta",
+          "properties": {
+            "contract_files": { "type": "array", "items": { "type": "string" } },
+            "actual_changed_files": { "type": "array", "items": { "type": "string" } },
+            "unexpected_files": { "type": "array", "items": { "type": "string" } },
+            "scope_clean": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "validation": {
+      "type": "object",
+      "properties": {
+        "commands_run": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "command": { "type": "string" },
+              "status": { "type": "string", "enum": ["passed", "failed", "skipped"] },
+              "evidence": { "type": "string" },
+              "related_to_changes": { "type": "boolean", "description": "Whether this validation covers files that were changed" }
+            }
+          }
+        },
+        "commands_not_run": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "command": { "type": "string" },
+              "reason": { "type": "string" }
+            }
+          }
+        },
+        "touched_area_failed": {
+          "type": "boolean",
+          "description": "Guard #8: true if any validation covering changed files failed"
+        }
+      }
+    },
+    "intelligence": {
+      "type": "object",
+      "properties": {
+        "mode": { "type": "string", "enum": ["full_gitnexus", "gitnexus_only", "context_mode_only", "degraded_gh", "degraded_local"] },
+        "gitnexus_probe_attempted": { "type": "boolean" },
+        "gitnexus_available": { "type": "boolean" },
+        "unavailable_reason": { "type": "string" },
+        "gh_available": { "type": "boolean" },
+        "mcp_gitnexus": { "type": "boolean", "description": "GitNexus MCP server available" },
+        "mcp_context_mode": { "type": "boolean", "description": "context-mode MCP server available — provides search_codebase, find_references, run_tests, typecheck, lint, git_*" },
+        "evidence": {
+          "type": "object",
+          "description": "Deterministic phase-gate evidence proving intelligence was gathered or honestly degraded.",
+          "properties": {
+            "gitnexus_calls": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": ["list_repos", "query", "impact", "context", "detect_changes", "api_impact", "cypher"]
+              }
+            },
+            "fallback_commands": { "type": "array", "items": { "type": "string" } },
+            "primary_target": { "type": "string" },
+            "key_symbol": { "type": "string" },
+            "repo_intelligence_path": { "type": "string" },
+            "recorded_at": { "type": "string", "format": "date-time" }
+          }
+        },
+        "disclosure": { "type": "string" },
+        "unavailable_capabilities": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Guard #10: list of specific intelligence capabilities that were NOT available"
+        },
+        "minimum_risk_floor": {
+          "type": "string",
+          "enum": ["low", "medium", "high"],
+          "description": "Guard #10: minimum risk level when primary intelligence is unavailable"
+        }
+      }
+    },
+    "github_user": {
+      "type": "string",
+      "description": "GitHub login of the user. Used for ownership checks and commit authorship."
+    },
+    "git_identity": {
+      "type": "object",
+      "description": "Local git identity recorded at Phase 0. Distinct from github_user (which is the gh API login).",
+      "properties": {
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "configured": { "type": "boolean", "description": "False if user.name or user.email is empty" }
+      }
+    },
+    "ownership": {
+      "type": "object",
+      "description": "Guard #9: ownership ambiguity detection",
+      "properties": {
+        "pr_author": { "type": "string" },
+        "branch_head_repo": { "type": "string" },
+        "is_own_pr": { "type": "boolean" },
+        "ambiguous": { "type": "boolean" },
+        "resolution": { "type": "string", "enum": ["confirmed_user", "confirmed_other", "ambiguous_fork", "ambiguous_branch_mismatch"] }
+      }
+    },
+    "review_freshness": {
+      "type": "object",
+      "description": "Guard #1: stale-review detection",
+      "properties": {
+        "last_fetched_at": { "type": "string", "format": "date-time" },
+        "comments_at_fetch": { "type": "integer" },
+        "new_comments_since_fetch": { "type": "integer" },
+        "new_check_failures_since_fetch": { "type": "integer" },
+        "fresh": { "type": "boolean" }
+      }
+    },
+    "ci_status": {
+      "type": "object",
+      "description": "Guard #2: GitHub CI/check awareness",
+      "properties": {
+        "overall": { "type": "string", "enum": ["passed", "failed_related", "failed_unrelated", "pending", "unavailable"] },
+        "failed_checks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "status": { "type": "string" },
+              "related_to_changes": { "type": "boolean" },
+              "reason": { "type": "string" }
+            }
+          }
+        },
+        "checked_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "branch_status": {
+      "type": "object",
+      "description": "Guard #3: branch/base drift detection",
+      "properties": {
+        "base_current": { "type": "boolean" },
+        "base_behind_commits": { "type": "integer" },
+        "ahead_of_base_commits": { "type": "integer" },
+        "drift_status": { "type": "string", "enum": ["base_current", "base_behind_but_safe", "base_diverged_needs_rebase", "wrong_base_branch"] },
+        "checked_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "commit_hygiene": {
+      "type": "object",
+      "description": "Guard #6: commit message hygiene check",
+      "properties": {
+        "checked": { "type": "boolean" },
+        "clean": { "type": "boolean" },
+        "violations": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "List of commit messages that failed hygiene check"
+        }
+      }
+    },
+    "artifact_exclusion": {
+      "type": "object",
+      "description": "Guard #4: .prforge/ artifact exclusion verification",
+      "properties": {
+        "checked": { "type": "boolean" },
+        "clean": { "type": "boolean" },
+        "staged_artifacts": { "type": "array", "items": { "type": "string" } },
+        "tracked_artifacts": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "release": {
+      "type": "object",
+      "properties": {
+        "ready": { "type": "boolean" },
+        "requires_user_approval": { "type": "boolean" },
+        "approval_status": {
+          "type": "string",
+          "enum": ["READY_TO_SHIP", "READY_WITH_WARNINGS", "BLOCKED"],
+          "description": "Guard #8: overall approval readiness based on validation, CI, scope, and freshness"
+        },
+        "blocking_reasons": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Human-readable reasons if approval_status is BLOCKED"
+        },
+        "warning_reasons": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Human-readable warnings if approval_status is READY_WITH_WARNINGS"
+        },
+        "suggested_actions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "action": { "type": "string", "enum": ["push", "force_push", "create_pr", "post_comment", "request_review"] },
+              "command": { "type": "string" },
+              "description": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "public_text": {
+      "type": "object",
+      "description": "Guard #5: exact public response preview",
+      "properties": {
+        "review_response": { "type": "string" },
+        "pr_body_update": { "type": "string" },
+        "issue_comment": { "type": "string" }
+      }
+    },
+    "dod": {
+      "type": "object",
+      "description": "Definition of Done — generated at PLAN time, verified at APPROVAL",
+      "properties": {
+        "generation_hash": {
+          "type": "string",
+          "description": "SHA256 of dod.md at generation time. If current hash differs, the checklist was tampered with."
+        },
+        "generated_at": { "type": "string", "format": "date-time" },
+        "items_total": { "type": "integer" },
+        "items_checked": { "type": "integer" },
+        "evidence_verified": { "type": "boolean", "description": "True if every checked item has corroborating evidence in git diff / validation_ledger / review_decomposition" },
+        "tampered": { "type": "boolean", "description": "True if current dod.md hash differs from generation_hash" }
+      }
+    },
+    "plan_compliance": {
+      "type": "object",
+      "description": "Verified at end of IMPLEMENT: actual diff vs patch_plan.md",
+      "properties": {
+        "planned_files": { "type": "array", "items": { "type": "string" } },
+        "actual_files": { "type": "array", "items": { "type": "string" } },
+        "missing_from_plan": { "type": "array", "items": { "type": "string" }, "description": "Files in patch_plan but not touched" },
+        "extra_not_in_plan": { "type": "array", "items": { "type": "string" }, "description": "Files touched but not in patch_plan" },
+        "compliant": { "type": "boolean" }
+      }
+    },
+    "approval": {
+      "type": "object",
+      "properties": {
+        "approval_id": { "type": "string" },
+        "approved_at": { "type": "string", "format": "date-time" },
+        "approved_actions": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["push", "force_push", "create_pr", "post_comment", "request_review"] }
+        },
+        "diff_hash": { "type": "string" },
+        "validation_hash": { "type": "string" },
+        "approval_md_hash": { "type": "string" },
+        "dod_hash": { "type": "string", "description": "Must match dod.generation_hash — verified at /pr-approve" },
+        "stale": { "type": "boolean" }
+      }
+    },
+    "blocker": {
+      "type": "object",
+      "properties": {
+        "reason": { "type": "string" },
+        "details": { "type": "string" },
+        "suggested_fix": { "type": "string" }
+      }
+    },
+    "redirect": {
+      "type": "object",
+      "description": "Recoverable redirect packet for policy detours that should not be treated as task failure.",
+      "properties": {
+        "type": { "type": "string", "const": "redirect" },
+        "severity": { "type": "string", "enum": ["recoverable", "needs_auditor_review", "terminal"] },
+        "reason": { "type": "string" },
+        "blocked_action": { "type": "string" },
+        "target": { "type": "string" },
+        "current_phase": { "type": "string" },
+        "original_objective": { "type": "string" },
+        "allowed_actions": { "type": "array", "items": { "type": "string" } },
+        "blocked_actions": { "type": "array", "items": { "type": "string" } },
+        "required_next_action": { "type": "string" },
+        "return_to_phase_after_recovery": { "type": "string" },
+        "redirect_count": { "type": "integer" },
+        "do_not_treat_redirect_as_completion": { "type": "boolean" }
+      }
+    },
+    "started_at": { "type": "string", "format": "date-time" },
+    "last_updated": { "type": "string", "format": "date-time" }
+  }
+}

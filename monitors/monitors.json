@@ -1,0 +1,22 @@
+{
+  "monitors": [
+    {
+      "name": "prforge-local-watch",
+      "command": "${CLAUDE_PLUGIN_ROOT}/monitors/local-watch.sh",
+      "description": "Watches local PRForge repo/session state: git drift, dirty worktree, review updates, test status, approval integrity, branch upstream, hook health, context pressure. Runs on every PRForge session.",
+      "when": "on-skill-invoke:prforge"
+    },
+    {
+      "name": "prforge-distributed-worker-watch",
+      "command": "${CLAUDE_PLUGIN_ROOT}/monitors/distributed-worker-watch.sh",
+      "description": "Watches distributed worker state: assigned jobs, lease renewal, coordinator directives, revision jobs from audit loop. Runs on worker nodes in distributed mode.",
+      "when": "on-skill-invoke:prforge"
+    },
+    {
+      "name": "prforge-distributed-coordinator-watch",
+      "command": "${CLAUDE_PLUGIN_ROOT}/monitors/distributed-coordinator-watch.sh",
+      "description": "Watches distributed coordinator state: worker heartbeats, queue depth, stale leases, signoff state, auditor verdicts, reviewer update dispatch. Runs on coordinator/auditor nodes.",
+      "when": "on-skill-invoke:prforge"
+    }
+  ]
+}

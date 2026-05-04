@@ -1,0 +1,53 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PRForge Mesh Manager Verdict",
+  "description": "Schema for .prforge/mesh/manager_verdict.json — manager policy decision",
+  "type": "object",
+  "required": ["decision", "authority", "timestamp", "all_criteria_pass", "criteria"],
+  "additionalProperties": false,
+  "properties": {
+    "decision": {
+      "type": "string",
+      "enum": ["manager_disabled", "manager_certified", "manager_requeue", "manager_blocked", "manager_escalate", "manager_auto_ship_allowed"]
+    },
+    "authority": {
+      "type": "string",
+      "enum": ["off", "certify_only", "internal_actions", "low_risk_public"]
+    },
+    "timestamp": { "type": "string" },
+    "all_criteria_pass": { "type": "boolean" },
+    "auto_certified": { "type": "boolean" },
+    "failure_reason": { "type": "string" },
+    "coordinator_verdict_present": { "type": "boolean" },
+    "auditor_verdict_present": { "type": "boolean" },
+    "criteria": {
+      "type": "object",
+      "properties": {
+        "coordinator_pass": { "$ref": "#/$defs/check_result" },
+        "auditor_pass": { "$ref": "#/$defs/check_result" },
+        "clean_validation": { "$ref": "#/$defs/check_result" },
+        "review_freshness": { "$ref": "#/$defs/check_result" },
+        "ci_relatedness": { "$ref": "#/$defs/check_result" },
+        "no_unknown_ci": { "$ref": "#/$defs/check_result" },
+        "no_scope_delta": { "$ref": "#/$defs/check_result" },
+        "dod_evidence": { "$ref": "#/$defs/check_result" },
+        "artifact_exclusion": { "$ref": "#/$defs/check_result" },
+        "risk_threshold": { "$ref": "#/$defs/check_result" }
+      }
+    },
+    "_signature": {
+      "type": "string",
+      "description": "HMAC-SHA256 hex digest of canonical JSON (excludes _signature field)"
+    }
+  },
+  "$defs": {
+    "check_result": {
+      "type": "object",
+      "required": ["pass"],
+      "properties": {
+        "pass": { "type": "boolean" },
+        "reason": { "type": "string" }
+      }
+    }
+  }
+}

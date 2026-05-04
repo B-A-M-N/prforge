@@ -1,0 +1,14 @@
+{
+  "_comment": "new_pr mode extensions (also used for ci_fix, local_task). Merge with base.json at PLAN time.",
+  "required_at_investigate": ["issue_analysis"],
+  "required_at_package": ["pr_body"],
+  "field_definitions": {
+    "issue_number": "integer — GitHub issue number if applicable",
+    "issue_analysis": {
+      "root_cause": "string",
+      "acceptance_criteria": "array",
+      "related_files": "array"
+    },
+    "pr_body": "string — full PR body text, previewed in approval.md"
+  }
+}

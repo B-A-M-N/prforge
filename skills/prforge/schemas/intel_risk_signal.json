@@ -1,0 +1,26 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PRForge Intel Risk Signal",
+  "description": "Local or mesh adaptive risk signal. May increase caution or choose a redirect path; never bypasses deterministic gates.",
+  "type": "object",
+  "required": ["risk_type", "risk_score", "source"],
+  "additionalProperties": true,
+  "properties": {
+    "source": {
+      "type": "string",
+      "enum": ["mesh_embedding_reranker", "local_embedding_reranker", "local_lexical_fallback", "auditor", "coordinator"]
+    },
+    "risk_type": {
+      "type": "string",
+      "enum": ["missing_regression_test", "missing_review_refresh", "unexpected_file", "artifact_leak", "contract_mismatch", "stale_state", "related_ci_failure", "maintainer_objection_likelihood"]
+    },
+    "risk_score": { "type": "number", "minimum": 0, "maximum": 1 },
+    "reason": { "type": "string" },
+    "recommended_redirect": {
+      "type": "string",
+      "enum": ["VALIDATION_REPAIR", "REVIEW_REFRESH", "SCOPE_RECONCILE", "ARTIFACT_REPAIR", "PLAN_UPDATE", "STATE_SYNC_REPAIR", "COORDINATOR_RECONCILE"]
+    },
+    "required_next_action": { "type": "string" },
+    "supporting_artifacts": { "type": "array", "items": { "type": "string" } }
+  }
+}

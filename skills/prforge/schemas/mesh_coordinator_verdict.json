@@ -1,0 +1,47 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PRForge Mesh Coordinator Verdict",
+  "description": "Schema for .prforge/mesh/coordinator_verdict.json — coordinator verification of worker submission",
+  "type": "object",
+  "required": ["decision", "job_id", "node_id", "repo", "pr_number", "timestamp", "checks", "all_pass"],
+  "additionalProperties": false,
+  "properties": {
+    "decision": {
+      "type": "string",
+      "enum": ["coordinator_pass", "coordinator_fail"]
+    },
+    "job_id": { "type": "string", "minLength": 1 },
+    "node_id": { "type": "string", "minLength": 1 },
+    "repo": { "type": "string", "pattern": "^[^/]+/[^/]+$" },
+    "pr_number": { "type": "string" },
+    "timestamp": { "type": "string" },
+    "all_pass": { "type": "boolean" },
+    "failure_reason": { "type": "string" },
+    "checks": {
+      "type": "object",
+      "properties": {
+        "lease_valid": { "$ref": "#/$defs/check_result" },
+        "worker_owns_job": { "$ref": "#/$defs/check_result" },
+        "worker_role": { "$ref": "#/$defs/check_result" },
+        "pr_branch_locks": { "$ref": "#/$defs/check_result" },
+        "global_limits": { "$ref": "#/$defs/check_result" },
+        "job_type_compat": { "$ref": "#/$defs/check_result" },
+        "artifacts": { "$ref": "#/$defs/check_result" }
+      }
+    },
+    "_signature": {
+      "type": "string",
+      "description": "HMAC-SHA256 hex digest of canonical JSON (excludes _signature field)"
+    }
+  },
+  "$defs": {
+    "check_result": {
+      "type": "object",
+      "required": ["pass"],
+      "properties": {
+        "pass": { "type": "boolean" },
+        "reason": { "type": "string" }
+      }
+    }
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "_comment": "review_response mode extensions. Merge with base.json at PLAN time.",
+  "required_at_investigate": ["review_decomposition", "review_freshness"],
+  "required_at_implement": ["completed_reviews"],
+  "field_definitions": {
+    "reviewer": "string — GitHub login of the reviewer",
+    "reviewUrl": "string — URL of the review being addressed",
+    "review_decomposition": {
+      "required_concerns": "array of {id, severity, classification, status}",
+      "optional_concerns": "array",
+      "needs_user_decision": "array"
+    },
+    "review_freshness": {
+      "comments_at_fetch": "integer",
+      "last_fetched_at": "string",
+      "fresh": "boolean"
+    },
+    "completed_reviews": "array of concern IDs marked addressed"
+  }
+}

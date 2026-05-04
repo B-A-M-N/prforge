@@ -1,0 +1,54 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PRForge Mesh Auditor Verdict",
+  "description": "Schema for .prforge/mesh/auditor_verdict.json — read-only auditor verification",
+  "type": "object",
+  "required": ["decision", "repo", "pr_number", "timestamp", "checks", "all_pass", "risk_level", "head_sha"],
+  "additionalProperties": false,
+  "properties": {
+    "decision": {
+      "type": "string",
+      "enum": ["auditor_pass", "auditor_fail"]
+    },
+    "repo": { "type": "string", "pattern": "^[^/]+/[^/]+$" },
+    "pr_number": { "type": "string" },
+    "timestamp": { "type": "string" },
+    "all_pass": { "type": "boolean" },
+    "risk_level": {
+      "type": "string",
+      "enum": ["low", "medium", "high", "critical"]
+    },
+    "head_sha": { "type": "string" },
+    "failure_reason": { "type": "string" },
+    "checks": {
+      "type": "object",
+      "properties": {
+        "diff_matches_approval": { "$ref": "#/$defs/check_result" },
+        "dod_evidence_valid": { "$ref": "#/$defs/check_result" },
+        "validation_claims_supported": { "$ref": "#/$defs/check_result" },
+        "review_freshness_clean": { "$ref": "#/$defs/check_result" },
+        "ci_relatedness_clean": { "$ref": "#/$defs/check_result" },
+        "unknown_ci_exists": { "$ref": "#/$defs/check_result" },
+        "scope_delta_clean": { "$ref": "#/$defs/check_result" },
+        "branch_drift_clean": { "$ref": "#/$defs/check_result" },
+        "prforge_artifacts_not_staged": { "$ref": "#/$defs/check_result" },
+        "commit_hygiene_clean": { "$ref": "#/$defs/check_result" },
+        "public_text_preview_exists": { "$ref": "#/$defs/check_result" }
+      }
+    },
+    "_signature": {
+      "type": "string",
+      "description": "HMAC-SHA256 hex digest of canonical JSON (excludes _signature field)"
+    }
+  },
+  "$defs": {
+    "check_result": {
+      "type": "object",
+      "required": ["pass"],
+      "properties": {
+        "pass": { "type": "boolean" },
+        "reason": { "type": "string" }
+      }
+    }
+  }
+}
