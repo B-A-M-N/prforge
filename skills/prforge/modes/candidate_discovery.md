@@ -4,6 +4,13 @@ Read this file immediately after detecting task type `candidate_discovery` in IN
 
 ---
 
+## Schema Requirements for This Mode
+
+At PLAN time, read and merge `$SKILL_ROOT/schemas/candidate_discovery.json` with
+`$SKILL_ROOT/schemas/base.json`.
+
+---
+
 ## Candidate Discovery Mode
 
 When the user asks to find PR candidates for a named repo (no specific issue/PR link):

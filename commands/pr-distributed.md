@@ -205,6 +205,8 @@ pip3 install fastembed>=0.5.0
 ```
 Then re-check.
 
+**Note:** The `mesh_signing.py` module must be available in the `scripts/mesh/` directory. It is required for artifact signature verification in distributed manager mode.
+
 If `gh` auth is failing AND role includes `auditor`, warn: "gh auth login required for auditor polling".
 
 ### Step 2 — Gather config values

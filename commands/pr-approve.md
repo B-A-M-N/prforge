@@ -148,16 +148,20 @@ CURRENT_DOD_HASH=$(sha256sum "$ARTIFACT_DIR/dod.md" | awk '{print $1}')
 ```
 
 **Compare:**
-- If `CURRENT_DIFF_HASH` ≠ `approval.diff_hash` → **STALE**. Code changed since approval.
-- If `CURRENT_VAL_HASH` ≠ `approval.validation_hash` → **STALE**. Validation changed since approval.
-- If `CURRENT_APPROVAL_HASH` ≠ `approval.approval_md_hash` → **STALE**. Approval artifact was edited.
+
+**Tamper Checks:**
 - If `CURRENT_DOD_HASH` ≠ `state.dod.generation_hash` → **TAMPERED**. DoD was edited after generation.
   This is not a stale-approval condition — it means the checklist itself was changed.
   Tell the user: "dod.md was modified after it was generated. The DoD must reflect the original plan.
   I need to regenerate the DoD from the contract and re-run all phases."
-  Do NOT regenerate approval — the whole run is invalidated. Restart from PLAN.
+  Do NOT regenerate approval — the whole run is invalidated. Restart from PLAN. Stop.
 
-**If ANY hash mismatch:**
+**Stale Checks:**
+- If `CURRENT_DIFF_HASH` ≠ `approval.diff_hash` → **STALE**. Code changed since approval.
+- If `CURRENT_VAL_HASH` ≠ `approval.validation_hash` → **STALE**. Validation changed since approval.
+- If `CURRENT_APPROVAL_HASH` ≠ `approval.approval_md_hash` → **STALE**. Approval artifact was edited.
+
+**If any STALE check fails:**
 1. Set `state.approval.stale = true`
 2. Tell the user:
    ```
@@ -172,7 +176,17 @@ CURRENT_DOD_HASH=$(sha256sum "$ARTIFACT_DIR/dod.md" | awk '{print $1}')
 4. Present the new approval. Wait for user confirmation.
 5. Only then proceed to Step 2.
 
-### 1d. Approved actions check
+### 1d. Evidence cross-reference check
+
+For every checked item in `$ARTIFACT_DIR/dod.md`, verify corroborating evidence:
+- Implementation items: `git diff` must show the relevant file changed.
+- Test items: `$ARTIFACT_DIR/validation_ledger.md` must have a passing entry for the command.
+- Review items: `$ARTIFACT_DIR/review_decomposition.md` must show status addressed.
+- Scope items: `state.scope.delta_check.unexpected_files` must be empty.
+
+If any checked item lacks evidence, the approval is invalid. Stop and tell the user: "Evidence missing for DoD item: [item]".
+
+### 1e. Approved actions check
 
 From `state.approval.approved_actions`, verify the action the user is approving is explicitly listed.
 

@@ -4,6 +4,13 @@ Read this file immediately after detecting task type `pr_polish` in INTAKE.
 
 ---
 
+## Schema Requirements for This Mode
+
+At PLAN time, read and merge `$SKILL_ROOT/schemas/pr_polish.json` with
+`$SKILL_ROOT/schemas/base.json`.
+
+---
+
 ## PR Polish Mode (`pr_polish`)
 
 When the user links their own open PR that has no review comments (or asks to "clean up" / "polish" a PR):

@@ -70,6 +70,7 @@ DIFF_HASH=$(git diff --stat 2>/dev/null | sha256sum | awk '{print $1}')
 DIFF_HASH="$DIFF_HASH$(git diff --cached --stat 2>/dev/null | sha256sum | awk '{print $1}')"
 VAL_HASH=$(sha256sum .prforge/validation_ledger.md | awk '{print $1}')
 APPROVAL_HASH=$(sha256sum .prforge/approval.md | awk '{print $1}')
+DOD_HASH=$(sha256sum .prforge/dod.md | awk '{print $1}')
 ```
 
 ## Step 4: Record approval in state.json
@@ -84,6 +85,7 @@ APPROVAL_HASH=$(sha256sum .prforge/approval.md | awk '{print $1}')
     "diff_hash": "<DIFF_HASH>",
     "validation_hash": "<VAL_HASH>",
     "approval_md_hash": "<APPROVAL_HASH>",
+    "dod_hash": "<DOD_HASH>",
     "stale": false
   }
 }

@@ -111,6 +111,9 @@ Repair states:
 - `VALIDATION_REPAIR`
 - `ARTIFACT_REPAIR`
 - `COORDINATOR_RECONCILE`
+- `STYLE_REPAIR`
+- `COMMIT_REPAIR`
+- `POLL_CI`
 
 No other transitions are valid. Shipping actions (`git push`, `gh pr create`, `gh pr comment`) are only permitted from SHIPPED and only after explicit user approval was recorded in the current session.
 
