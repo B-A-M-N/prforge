@@ -19,6 +19,7 @@
         "dependency_files_touched": { "type": "boolean" },
         "unexpected_refactor_risk": { "type": "boolean" },
         "validation_required": { "type": "boolean" },
+        "test_files_included": { "type": "boolean" },
         "diff_size_acceptable": { "type": "boolean" }
       }
     },

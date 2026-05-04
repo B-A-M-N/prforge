@@ -313,6 +313,7 @@ def cmd_intel_query(args: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="PRForge Mesh daemon")
+    parser.add_argument("--config", help="Path to config.json")
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("worker")
@@ -377,7 +378,8 @@ def main() -> None:
         cmd_intel_query(args)
         return
 
-    config = load_config()
+    config_path = Path(args.config) if args.config else Path(os.environ.get("PRFORGE_MESH_CONFIG", CONFIG_PATH))
+    config = load_config(config_path)
 
     dispatch = {
         "worker":      cmd_worker,

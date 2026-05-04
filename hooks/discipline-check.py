@@ -54,6 +54,19 @@ def check_dependency_touch(changed_files):
     touched = [f for f in changed_files if any(p in f for p in dep_patterns)]
     return touched
 
+def check_tests_included(changed_files):
+    """Check if tests were included when source files were changed."""
+    src_patterns = ['.py', '.js', '.ts', '.go', '.java', '.cpp', '.c', '.h', '.rb', '.rs']
+    test_patterns = ['test', 'spec']
+    
+    src_changed = any(any(f.endswith(ext) for ext in src_patterns) and not any(tp in f.lower() for tp in test_patterns) for f in changed_files)
+    test_changed = any(any(tp in f.lower() for tp in test_patterns) for f in changed_files)
+    
+    # If source files were changed but no tests were changed
+    if src_changed and not test_changed:
+        return False
+    return True
+
 def main():
     args = parse_args()
     report = {"status": "PASS", "phase": "IMPLEMENT", "checks": {}, "findings": [], "required_recovery": ""}
@@ -92,6 +105,16 @@ def main():
             "severity": "blocker",
             "type": "dependency_touch",
             "message": f"Dependency files touched without contract approval: {', '.join(dep_touched)}"
+        })
+
+    # Check 4: Test files
+    tests_included = check_tests_included(changed)
+    report['checks']['test_files_included'] = tests_included
+    if not tests_included:
+        report['findings'].append({
+            "severity": "warning",
+            "type": "missing_tests",
+            "message": "Source files were modified but no test files were included. Verify test coverage."
         })
 
     # Determine status

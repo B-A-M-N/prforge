@@ -33,6 +33,36 @@ IS_COMMIT=false
 echo "$CMD" | grep -qiE "$PUBLIC_ACTION_RE" && IS_PUBLIC_ACTION=true || true
 echo "$CMD" | grep -qiE "$GIT_COMMIT_RE"    && IS_COMMIT=true        || true
 
+# --- Mesh Health Check (once per session, quiet auto-heal) ---
+if [ -f "$HOME/.prforge-mesh/sessions/local/$(prforge_get_session_id 2>/dev/null || echo unknown)/node_id" ] ||
+   [ -f "$HOME/.prforge-mesh/sessions/lan/$(prforge_get_session_id 2>/dev/null || echo unknown)/node_id" ]; then
+
+  CHECK_FILE="$HOME/.prforge-mesh/.last_mesh_check"
+  RUN_CHECK=true
+  if [ -f "$CHECK_FILE" ]; then
+    LAST_CHECK=$(cat "$CHECK_FILE")
+    NOW=$(date +%s)
+    if [ $((NOW - LAST_CHECK)) -lt 3600 ]; then
+      RUN_CHECK=false
+    fi
+  fi
+
+  if [ "$RUN_CHECK" = true ]; then
+    MESH_SCRIPTS=$(find "$HOME" -path "*/prforge/*/scripts/mesh" -type d 2>/dev/null | head -1)
+    if [ -n "$MESH_SCRIPTS" ]; then
+      SID=$(prforge_get_session_id 2>/dev/null || echo "")
+      if [ -n "$SID" ]; then
+        if ! python3 "$MESH_SCRIPTS/meshctl.py" health --session "$SID" 2>/dev/null; then
+          if python3 "$MESH_SCRIPTS/meshctl.py" heal --session "$SID" 2>/dev/null; then
+            echo "Mesh was stale. Restarted node. Continuing."
+          fi
+        fi
+      fi
+    fi
+    date +%s > "$CHECK_FILE"
+  fi
+fi
+
 if [ "$IS_PUBLIC_ACTION" = "false" ] && [ "$IS_COMMIT" = "false" ]; then
   exit 0
 fi

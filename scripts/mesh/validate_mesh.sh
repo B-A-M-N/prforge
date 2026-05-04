@@ -13,7 +13,10 @@ PASS=0
 FAIL=0
 SKIP=0
 
-MESH_CONFIG="$HOME/.prforge-mesh/config.json"
+MESH_CONFIG=$(find "$HOME/.prforge-mesh/local" "$HOME/.prforge-mesh/lan" -name "config.json" -type f 2>/dev/null | head -n 1 || echo "")
+if [[ -z "$MESH_CONFIG" ]]; then
+    MESH_CONFIG="$HOME/.prforge-mesh/config.json" # Fallback
+fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Allow PYTHON override for environments where default python3 lacks redis-py
@@ -63,8 +66,8 @@ if ! "$PYTHON" -c "import fastembed" 2>/dev/null; then
     exit 1
 fi
 
-if [[ ! -f "$MESH_CONFIG" ]]; then
-    echo "ERROR: $MESH_CONFIG not found. Run /pr-distributed <role> first."
+if [[ -z "$MESH_CONFIG" ]] || [[ ! -f "$MESH_CONFIG" ]]; then
+    echo "ERROR: Config not found. Run /pr-distributed <role> first."
     exit 1
 fi
 
@@ -502,7 +505,7 @@ INBOX="$TEST_REPO/.prforge/inbox/job.json"
     fail "J: standalone regression" "inbox file should not exist in clean repo"
 
 # Verify config absence does not affect non-mesh PRForge
-[[ ! -f "$HOME/.prforge-mesh/config.json" ]] && \
+[[ ! -f "$MESH_CONFIG" ]] && \
     skip "J: standalone config absence" "config.json present (this is a mesh node)" || \
     pass "J: standalone config absence"
 

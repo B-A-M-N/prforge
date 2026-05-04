@@ -249,3 +249,81 @@ prforge_state_py() {
   done
   echo ""
 }
+
+# ── Session ID Helpers ──
+
+prforge_get_session_id() {
+  # Check if Claude exposes a session ID via env
+  for env_var in CLAUDE_SESSION_ID PRFORGE_SESSION_ID; do
+    val="${!env_var}"
+    if [ -n "$val" ]; then
+      echo "$val"
+      return 0
+    fi
+  done
+
+  # Generate + persist a PRForge session ID
+  local session_file="$HOME/.prforge-mesh/.session_id"
+  if [ -f "$session_file" ]; then
+    sid=$(cat "$session_file" | tr -d '[:space:]')
+    if [ -n "$sid" ]; then
+      echo "$sid"
+      return 0
+    fi
+  fi
+
+  sid=$(python3 -c "import uuid; print(str(uuid.uuid4()))" 2>/dev/null || echo "fallback-$$")
+  mkdir -p "$(dirname "$session_file")"
+  echo "$sid" > "$session_file"
+  export PRFORGE_SESSION_ID="$sid"
+  echo "$sid"
+}
+
+
+# ── Session Pointer Helpers ──
+
+prforge_get_session_pointer_path() {
+  local mode="$1"
+  local session_id="${2:-$(prforge_get_session_id)}"
+  echo "$HOME/.prforge-mesh/sessions/$mode/$session_id"
+}
+
+prforge_read_session_pointer() {
+  local mode="$1"
+  local session_id="${2:-$(prforge_get_session_id)}"
+  local ptr="$HOME/.prforge-mesh/sessions/$mode/$session_id"
+  if [ -f "$ptr" ]; then
+    cat "$ptr" | tr -d '[:space:]'
+  fi
+}
+
+prforge_write_session_pointer() {
+  local mode="$1"
+  local node_id="$2"
+  local session_id="${3:-$(prforge_get_session_id)}"
+  local ptr="$HOME/.prforge-mesh/sessions/$mode/$session_id"
+  mkdir -p "$(dirname "$ptr")"
+  echo "$node_id" > "$ptr"
+}
+
+
+# ── Lock File Helpers ──
+
+prforge_acquire_lock() {
+  local lock_path="$1"
+  local timeout="${2:-10}"
+  mkdir -p "$(dirname "$lock_path")"
+  local deadline=$(( $(date +%s) + timeout ))
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    if (set -o noclobber; echo "$$" > "$lock_path") 2>/dev/null; then
+      return 0
+    fi
+    sleep 0.2
+  done
+  return 1
+}
+
+prforge_release_lock() {
+  local lock_path="$1"
+  rm -f "$lock_path" 2>/dev/null
+}
