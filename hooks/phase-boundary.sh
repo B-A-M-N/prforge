@@ -324,6 +324,59 @@ PY
     prforge_redirect_message "IMPLEMENT->VALIDATE" "$REASON" "approved edits, reads, tests, validation repair, scope reconcile" "$NEXT; suggested repair state: $REDIRECT_STATE" "IMPLEMENT"
     exit 1
   fi
+
+  # --- Review decomposition enforcement ---
+  # If review_decomposition.md exists, ALL required items must be marked complete
+  REVIEW_DECOMP="$HARNESS_DIR/review_decomposition.md"
+  if [ -f "$REVIEW_DECOMP" ]; then
+    REVIEW_CHECK=$(python3 - "$REVIEW_DECOMP" <<'PY'
+import sys, re
+path = sys.argv[1]
+content = open(path, errors="replace").read()
+
+# Count required items (lines with [ ] or - [ ] that are not already checked)
+# and completed items (lines with [x] or - [x])
+required_not_done = 0
+required_done = 0
+optional_not_done = 0
+
+for line in content.split("\n"):
+    line = line.strip()
+    # Required items: [ ] checkbox not checked, or lines marked as required_change/blocker
+    if re.match(r'^[-*]\s*\[\s\]', line):
+        # Check if it's marked as required (not optional)
+        if any(tag in line.lower() for tag in ['required', 'blocker', 'must', 'change']):
+            required_not_done += 1
+        else:
+            optional_not_done += 1
+    elif re.match(r'^[-*]\s*\[x\]', line):
+        if any(tag in line.lower() for tag in ['required', 'blocker', 'must', 'change']):
+            required_done += 1
+        # Count all checked items
+        required_done += 0  # already counted above
+
+# Also check for explicit status markers
+if 'status: complete' in content.lower() or 'status: addressed' in content.lower():
+    # If the file explicitly marks items as complete, trust that
+    pass
+
+# Check for "all items addressed" or similar summary
+if required_not_done > 0:
+    print(f"FAIL:{required_not_done} required review items not addressed")
+else:
+    print("OK")
+PY
+)
+    if ! echo "$REVIEW_CHECK" | grep -qx "OK"; then
+      echo ""
+      echo "=== PRForge Review Gate ==="
+      echo "IMPLEMENT → VALIDATE blocked: ${REVIEW_CHECK#FAIL:}"
+      echo ""
+      echo "All required reviewer comments must be addressed before advancing."
+      echo "Review: $REVIEW_DECOMP"
+      exit 1
+    fi
+  fi
 fi
 
 # --- INTAKE → INVESTIGATE: mode must be set before investigation begins ---
@@ -450,11 +503,12 @@ fi
 if [ "$TRANSITION" = "SELF_REVIEW:PACKAGE" ]; then
   HARNESS_DIR="$(dirname "$FILE_PATH")"
   REVIEW_CHECK=$(python3 - "$HARNESS_DIR" <<'PY'
-import sys
+import sys, re
 from pathlib import Path
 
 artifact_dir = Path(sys.argv[1])
 missing = []
+findings = []
 
 hostile = artifact_dir / "hostile_review.md"
 if not hostile.exists():
@@ -465,6 +519,32 @@ else:
         missing.append("hostile_review.md is too thin — answer all 10 hostile audit questions with evidence")
     elif "PASS" not in text.upper():
         missing.append("hostile_review.md has no PASS verdict — resolve all NEEDS_FIX items and record final verdict")
+    else:
+        # Rigorous check: verify the hostile review actually addresses review items
+        review_decomp = artifact_dir / "review_decomposition.md"
+        if review_decomp.exists():
+            decomp_text = review_decomp.read_text(errors="replace")
+            # Count required items in review decomposition
+            required_items = re.findall(r'(?:required_change|blocker|must_fix|needs_fix)', decomp_text, re.IGNORECASE)
+            required_count = len(required_items)
+            
+            if required_count > 0:
+                # Check that hostile review references these items
+                # Each required item should have a corresponding finding in hostile review
+                # Look for item IDs, references to specific files, or issue numbers
+                item_refs = re.findall(r'(?:R\d+|Q\d+|item\s+\d+|finding\s+\d+)', text, re.IGNORECASE)
+                
+                # Check that the hostile review has actual findings (not just "all good")
+                has_findings = any(marker in text.lower() for marker in [
+                    'finding:', 'issue:', 'concern:', 'risk:', 'problem:',
+                    'addressed:', 'resolved:', 'fixed:', 'verified:'
+                ])
+                
+                # Check for per-item coverage
+                if required_count > 2 and len(item_refs) < required_count // 2:
+                    missing.append(f"hostile_review.md PASS but only references {len(item_refs)} of {required_count} required review items — each item needs explicit coverage")
+                elif not has_findings and required_count > 0:
+                    missing.append("hostile_review.md PASS but contains no actual findings — each review item needs a finding (even if 'no issue found')")
 
 print("FAIL:" + " | ".join(missing) if missing else "OK")
 PY
@@ -501,6 +581,95 @@ PY
   fi
 fi
 
+
+# --- Review Item → Git Diff Verification ---
+# For IMPLEMENT→VALIDATE and SELF_REVIEW→PACKAGE transitions,
+# verify that files mentioned in review_decomposition were actually modified
+if [ "$TRANSITION" = "IMPLEMENT:VALIDATE" ] || [ "$TRANSITION" = "SELF_REVIEW:PACKAGE" ]; then
+  HARNESS_DIR="$(dirname "$FILE_PATH")"
+  REVIEW_DECOMP="$HARNESS_DIR/review_decomposition.md"
+  if [ -f "$REVIEW_DECOMP" ]; then
+    DIFF_CHECK=$(python3 - "$HARNESS_DIR" <<'PY'
+import sys, re, subprocess
+from pathlib import Path
+
+artifact_dir = Path(sys.argv[1])
+decomp_file = artifact_dir / "review_decomposition.md"
+
+if not decomp_file.exists():
+    print("OK")
+    raise SystemExit(0)
+
+decomp = decomp_file.read_text(errors="replace")
+
+# Extract file paths mentioned in review items
+# Look for patterns like "file.ts", "src/foo/bar.ts", paths in backticks, etc.
+mentioned_files = set()
+# Match file paths in backticks
+mentioned_files.update(re.findall(r'`([^`]+\.(?:ts|js|py|go|rs|java|rb|cpp|c|h|md|json|yaml|yml|toml|cfg|conf))`', decomp, re.IGNORECASE))
+# Match file paths after "File:" or "In " patterns
+mentioned_files.update(re.findall(r'(?:File|In|Path):\s*([^\s:]+\.(?:ts|js|py|go|rs|java|rb|cpp|c|h|md|json|yaml|yml|toml|cfg|conf))', decomp, re.IGNORECASE))
+# Match bare file paths in review items
+mentioned_files.update(re.findall(r'(?:^|\s)([a-zA-Z0-9_/-]+\.(?:ts|js|py|go|rs|java|rb|cpp|c|h))\s', decomp))
+
+# Filter to only required/blocker items
+required_sections = re.findall(r'(?:required_change|blocker|must_fix).*?(?=###|\Z)', decomp, re.IGNORECASE | re.DOTALL)
+required_text = '\n'.join(required_sections)
+
+required_files = set()
+for f in mentioned_files:
+    # Check if this file is mentioned in a required section
+    if f in required_text or any(f in section for section in required_sections):
+        required_files.add(f)
+
+if not required_files:
+    print("OK")
+    raise SystemExit(0)
+
+# Check git diff for these files
+try:
+    diff_output = subprocess.run(
+        ["git", "diff", "--name-only", "HEAD~5..HEAD"],
+        capture_output=True, text=True, timeout=10,
+        cwd=str(artifact_dir)
+    ).stdout.strip()
+    
+    if not diff_output:
+        # Try broader diff
+        diff_output = subprocess.run(
+            ["git", "diff", "--name-only"],
+            capture_output=True, text=True, timeout=10,
+            cwd=str(artifact_dir)
+        ).stdout.strip()
+    
+    changed_files = set(diff_output.split('\n')) if diff_output else set()
+    
+    # Check if required files were actually modified
+    missing_files = []
+    for req_file in required_files:
+        # Check if any changed file matches or contains the required file
+        if not any(req_file in changed or changed in req_file for changed in changed_files):
+            missing_files.append(req_file)
+    
+    if missing_files:
+        print(f"FAIL:Review items reference files not modified in this branch: {', '.join(list(missing_files)[:5])}")
+    else:
+        print("OK")
+except Exception as e:
+    print(f"OK")  # Don't block on git errors
+PY
+)
+    if ! echo "$DIFF_CHECK" | grep -qx "OK"; then
+      echo ""
+      echo "=== PRForge Review-Diff Gate ==="
+      echo "${DIFF_CHECK#FAIL:}"
+      echo ""
+      echo "Reviewer comments reference files that were not modified."
+      echo "Either address these items or explicitly document why they don't require code changes."
+      exit 1
+    fi
+  fi
+fi
 
 # --- APPROVAL → POSTMORTEM: terminal snapshot and artifact enforcement ---
 if [ "$TRANSITION" = "APPROVAL:POSTMORTEM" ]; then
