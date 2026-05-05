@@ -59,19 +59,42 @@ Examples that require `needs_user_decision`:
 
 ## Mode-Specific PACKAGE Requirements
 
-Generate `review_response.md` in addition to (or instead of) `pr_body.md`:
+Generate `review_response.md` in addition to (or instead of) `pr_body.md`.
 
+**CRITICAL: `review_response.md` is an INTERNAL DRAFT. Never post it directly.**
+- The "# Maintainer Response Draft" heading is for internal use only
+- When posting the final comment, strip the heading — post ONLY the body text
+- The review response MUST go through the APPROVAL gate before posting
+- Include the exact posted text in `approval.md` → `state.public_text.review_response`
+
+**Template for `review_response.md` (internal draft):**
 ```markdown
-# Maintainer Response Draft
+# Maintainer Response Draft  ← INTERNAL ONLY, strip before posting
 
-Thanks, agreed. [One sentence acknowledging the concern.]
+**Commit:** `<full-sha>` (`<short-sha>`)
+
+Thanks, acknowledged. [One sentence acknowledging each concern.]
 
 [One to two sentences explaining what you changed and why.]
 
 Validation:
-- `npm test -- ...` — passed
-- `npm run typecheck` — passed
+- `<test command>` — passed
+- `<typecheck command>` — passed
 ```
+
+**When posting the final comment to GitHub, use ONLY this format:**
+```markdown
+Thanks, acknowledged. [One sentence.]
+
+[One to two sentences explaining what changed and why.]
+
+Validation:
+- `<test command>` — passed
+- `<typecheck command>` — passed
+```
+
+Do NOT include "# Maintainer Response Draft" in the posted text.
+Do NOT post until the user approves via the APPROVAL gate.
 
 **Tone rules:**
 - No defensiveness

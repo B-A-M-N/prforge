@@ -305,6 +305,37 @@ except:
         done <<< "$VIOLATION_MESSAGES"
       fi
 
+      # --- Commit author verification ---
+      # Verify commits use the configured git identity, not a hallucinated GitHub email
+      EXPECTED_NAME=$(git config user.name 2>/dev/null || echo "")
+      EXPECTED_EMAIL=$(git config user.email 2>/dev/null || echo "")
+      if [ -n "$EXPECTED_NAME" ] && [ -n "$EXPECTED_EMAIL" ]; then
+        # Check with base ref if available, otherwise last 20 commits
+        if [ -n "$BASE_REF" ]; then
+          AUTHOR_LOG=$(git log --format="%an <%ae>" "${BASE_REF}..HEAD" 2>/dev/null)
+        else
+          AUTHOR_LOG=$(git log --format="%an <%ae>" -n 20 2>/dev/null)
+        fi
+        if [ -n "$AUTHOR_LOG" ]; then
+          AUTHOR_MISMATCH=$(echo "$AUTHOR_LOG" | grep -vF "$EXPECTED_NAME <$EXPECTED_EMAIL>" | head -5 || true)
+          if [ -n "$AUTHOR_MISMATCH" ]; then
+            ISSUES+=("Commit author mismatch — expected '$EXPECTED_NAME <$EXPECTED_EMAIL>' but found:")
+            while IFS= read -r v; do
+              ISSUES+=("  ✗ $v")
+            done <<< "$AUTHOR_MISMATCH"
+          fi
+        fi
+        # Also check for GitHub noreply addresses that don't match the configured email
+        GITHUB_NOREPLY=$(echo "$AUTHOR_LOG" | grep -i "users.noreply.github.com" || true)
+        if [ -n "$GITHUB_NOREPLY" ] && ! echo "$EXPECTED_EMAIL" | grep -qi "users.noreply.github.com"; then
+          ISSUES+=("Commits use GitHub noreply email but git config has a different address:")
+          while IFS= read -r v; do
+            ISSUES+=("  ✗ $v")
+          done <<< "$GITHUB_NOREPLY"
+          ISSUES+=("Fix: git rebase -i with: git commit --amend --author=\"${EXPECTED_NAME} <${EXPECTED_EMAIL}>\" --no-edit")
+        fi
+      fi
+
       
       # --- Guard #11: Breaking Change / Semantic Versioning Check ---
       PUBLIC_API_TOUCHED=$(python3 -c "

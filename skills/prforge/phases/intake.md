@@ -44,8 +44,14 @@ state['git_identity'] = {
 }
 open('.prforge/state.json', 'w').write(json.dumps(state, indent=2))
 ```
-`git_identity` is the local commit author identity. This is distinct from `github_user`
-(the `gh api user` login used for PR ownership checks). Both are recorded separately.
+
+**CRITICAL: `git_identity` is the ONLY source of truth for commit authorship.**
+- `git config user.name` / `git config user.email` → commit author
+- `github_user` (from `gh api user`) → ownership checks ONLY
+- NEVER construct a commit email from the GitHub username
+- NEVER use `users.noreply.github.com` addresses unless that IS the configured git email
+- If `git_identity.configured` is false, STOP and ask the user to configure git before proceeding
+- The agent must NOT override `git config` values with GitHub-derived values
 
 **Permanently exclude `.prforge/` from git — MUST be the first git operation on any activation:**
 ```bash
