@@ -1,0 +1,335 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "MemoryLedgerSchema",
+  "description": "SQLite schema for the PRForge memory ledger database",
+  "type": "object",
+  "properties": {
+    "tables": {
+      "type": "object",
+      "description": "Table definitions for the memory ledger",
+      "properties": {
+        "runs": {
+          "type": "object",
+          "description": "Tracks PR run executions",
+          "properties": {
+            "columns": {
+              "type": "object",
+              "properties": {
+                "run_id": {
+                  "type": "string",
+                  "description": "Primary key; unique run identifier (UUID)",
+                  "constraints": ["PRIMARY KEY", "NOT NULL", "UNIQUE"]
+                },
+                "repo": {
+                  "type": "string",
+                  "description": "Repository identifier (org/repo)",
+                  "constraints": ["NOT NULL"]
+                },
+                "pr_number": {
+                  "type": "integer",
+                  "description": "Pull request number",
+                  "constraints": ["NOT NULL"]
+                },
+                "branch": {
+                  "type": "string",
+                  "description": "Source branch name",
+                  "constraints": ["NOT NULL"]
+                },
+                "head_sha": {
+                  "type": "string",
+                  "description": "Git commit SHA of the PR head",
+                  "constraints": ["NOT NULL"]
+                },
+                "base_branch": {
+                  "type": "string",
+                  "description": "Target base branch",
+                  "constraints": ["NOT NULL"]
+                },
+                "run_state": {
+                  "type": "string",
+                  "description": "Current phase/state (INTAKE, PLAN, IMPLEMENT, REVIEW, POSTMORTEM, MEMORY_INDEX, COMPLETE)",
+                  "constraints": ["NOT NULL"]
+                },
+                "outcome": {
+                  "type": "string",
+                  "description": "Final outcome (MERGED, CLOSED, ABANDONED, REVERTED)",
+                  "constraints": []
+                },
+                "created_at": {
+                  "type": "string",
+                  "description": "Run creation timestamp",
+                  "constraints": ["NOT NULL", "DEFAULT CURRENT_TIMESTAMP"]
+                },
+                "updated_at": {
+                  "type": "string",
+                  "description": "Last update timestamp",
+                  "constraints": ["NOT NULL", "DEFAULT CURRENT_TIMESTAMP"]
+                },
+                "metadata_json": {
+                  "type": "string",
+                  "description": "Additional metadata as JSON string",
+                  "constraints": []
+                }
+              }
+            }
+          },
+          "artifacts": {
+            "type": "object",
+            "description": "Artifacts generated during PR runs",
+            "properties": {
+              "columns": {
+                "artifact_id": {
+                  "type": "string",
+                  "description": "Primary key; unique artifact identifier (UUID)",
+                  "constraints": ["PRIMARY KEY", "NOT NULL", "UNIQUE"]
+                },
+                "run_id": {
+                  "type": "string",
+                  "description": "Foreign key to runs.run_id",
+                  "constraints": ["NOT NULL", "FOREIGN KEY (run_id) REFERENCES runs(run_id) ON DELETE CASCADE"]
+                },
+                "artifact_type": {
+                  "type": "string",
+                  "description": "Type of artifact (state_json, pr_json, review_comments, ci_runs, git_diff, commits, contract, validation, postmortem)",
+                  "constraints": ["NOT NULL"]
+                },
+                "file_path": {
+                  "type": "string",
+                  "description": "Path to the artifact file relative to run directory",
+                  "constraints": ["NOT NULL"]
+                },
+                "content_hash": {
+                  "type": "string",
+                  "description": "SHA256 hash of artifact content",
+                  "constraints": []
+                },
+                "created_at": {
+                  "type": "string",
+                  "description": "Artifact creation timestamp",
+                  "constraints": ["NOT NULL", "DEFAULT CURRENT_TIMESTAMP"]
+                },
+                "metadata_json": {
+                  "type": "string",
+                  "description": "Additional metadata as JSON string",
+                  "constraints": []
+                }
+              }
+            }
+          },
+          "pr_events": {
+            "type": "object",
+            "description": "PR lifecycle events (created, review, merge, close, etc.)",
+            "properties": {
+              "columns": {
+                "event_id": {
+                  "type": "string",
+                  "description": "Primary key; unique event identifier (UUID)",
+                  "constraints": ["PRIMARY KEY", "NOT NULL", "UNIQUE"]
+                },
+                "pr_number": {
+                  "type": "integer",
+                  "description": "Pull request number",
+                  "constraints": ["NOT NULL"]
+                },
+                "repo": {
+                  "type": "string",
+                  "description": "Repository identifier (org/repo)",
+                  "constraints": ["NOT NULL"]
+                },
+                "event_type": {
+                  "type": "string",
+                  "description": "Type of event (created, review_submitted, review_comment, merged, closed, reopened, labeled, etc.)",
+                  "constraints": ["NOT NULL"]
+                },
+                "actor": {
+                  "type": "string",
+                  "description": "GitHub user who performed the action",
+                  "constraints": []
+                },
+                "event_data_json": {
+                  "type": "string",
+                  "description": "Full event payload as JSON",
+                  "constraints": []
+                },
+                "created_at": {
+                  "type": "string",
+                  "description": "Event timestamp from GitHub",
+                  "constraints": ["NOT NULL"]
+                },
+                "recorded_at": {
+                  "type": "string",
+                  "description": "When this event was recorded locally",
+                  "constraints": ["NOT NULL", "DEFAULT CURRENT_TIMESTAMP"]
+                }
+              }
+            }
+          },
+          "postmortems": {
+            "type": "object",
+            "description": "Postmortem records linked to runs",
+            "properties": {
+              "columns": {
+                "postmortem_id": {
+                  "type": "string",
+                  "description": "Primary key; unique postmortem identifier (UUID)",
+                  "constraints": ["PRIMARY KEY", "NOT NULL", "UNIQUE"]
+                },
+                "run_id": {
+                  "type": "string",
+                  "description": "Foreign key to runs.run_id (unique)",
+                  "constraints": ["NOT NULL", "UNIQUE", "FOREIGN KEY (run_id) REFERENCES runs(run_id) ON DELETE CASCADE"]
+                },
+                "confidence": {
+                  "type": "string",
+                  "description": "Confidence level (low, medium, high)",
+                  "constraints": ["NOT NULL"]
+                },
+                "summary_json": {
+                  "type": "string",
+                  "description": "Summary object (what_was_done, could_be_better, etc.) as JSON",
+                  "constraints": ["NOT NULL"]
+                },
+                "evidence_json": {
+                  "type": "string",
+                  "description": "Evidence array as JSON",
+                  "constraints": ["NOT NULL"]
+                },
+                "tags_json": {
+                  "type": "string",
+                  "description": "Tags array as JSON",
+                  "constraints": ["NOT NULL"]
+                },
+                "created_at": {
+                  "type": "string",
+                  "description": "Postmortem creation timestamp",
+                  "constraints": ["NOT NULL", "DEFAULT CURRENT_TIMESTAMP"]
+                }
+              }
+            }
+          },
+          "memory_records": {
+            "type": "object",
+            "description": "Extracted memory/lesson records",
+            "properties": {
+              "columns": {
+                "record_id": {
+                  "type": "string",
+                  "description": "Primary key; unique record identifier (UUID)",
+                  "constraints": ["PRIMARY KEY", "NOT NULL", "UNIQUE"]
+                },
+                "lesson_fingerprint": {
+                  "type": "string",
+                  "description": "Stable hash identifying this lesson across runs",
+                  "constraints": ["NOT NULL"]
+                },
+                "lesson_type": {
+                  "type": "string",
+                  "description": "Category (what_worked, could_be_better, avoid_next_time, maintainer_preference, reviewer_objection, test_expectation, repo_convention)",
+                  "constraints": ["NOT NULL"]
+                },
+                "lesson_text": {
+                  "type": "string",
+                  "description": "The lesson content",
+                  "constraints": ["NOT NULL"]
+                },
+                "repo_scope": {
+                  "type": "string",
+                  "description": "Repo identifier or NULL for universal",
+                  "constraints": []
+                },
+                "subsystem": {
+                  "type": "string",
+                  "description": "Subsystem/file scope",
+                  "constraints": []
+                },
+                "file_globs": {
+                  "type": "string",
+                  "description": "JSON array of file glob patterns",
+                  "constraints": []
+                },
+                "maintainer": {
+                  "type": "string",
+                  "description": "Maintainer identifier",
+                  "constraints": []
+                },
+                "confidence": {
+                  "type": "string",
+                  "description": "Confidence (low, medium, high)",
+                  "constraints": ["NOT NULL"]
+                },
+                "recurrence_count": {
+                  "type": "integer",
+                  "description": "Times this lesson has been observed",
+                  "constraints": ["NOT NULL", "DEFAULT 1"]
+                },
+                "evidence_refs_json": {
+                  "type": "string",
+                  "description": "JSON array of evidence references",
+                  "constraints": ["NOT NULL"]
+                },
+                "inferred": {
+                  "type": "integer",
+                  "description": "Boolean: 1 if inferred, 0 if explicit",
+                  "constraints": ["NOT NULL", "DEFAULT 0"]
+                },
+                "promotion_state": {
+                  "type": "string",
+                  "description": "State (candidate, active, suppressed, invalidated)",
+                  "constraints": ["NOT NULL", "DEFAULT 'candidate'"]
+                },
+                "first_seen_at": {
+                  "type": "string",
+                  "description": "First observation timestamp",
+                  "constraints": ["NOT NULL", "DEFAULT CURRENT_TIMESTAMP"]
+                },
+                "last_seen_at": {
+                  "type": "string",
+                  "description": "Last observation timestamp",
+                  "constraints": ["NOT NULL", "DEFAULT CURRENT_TIMESTAMP"]
+                }
+              }
+            }
+          },
+          "memory_fts": {
+            "type": "object",
+            "description": "Full-text search virtual table for memory records",
+            "properties": {
+              "columns": {
+                "rowid": {
+                  "type": "string",
+                  "description": "Row id (maps to memory_records.record_id)",
+                  "constraints": []
+                },
+                "lesson_text": {
+                  "type": "string",
+                  "description": "Lesson text for FTS indexing",
+                  "constraints": []
+                },
+                "subsystem": {
+                  "type": "string",
+                  "description": "Subsystem for FTS indexing",
+                  "constraints": []
+                },
+                "repo_scope": {
+                  "type": "string",
+                  "description": "Repo scope for FTS indexing",
+                  "constraints": []
+                },
+                "lesson_type": {
+                  "type": "string",
+                  "description": "Lesson type for FTS indexing",
+                  "constraints": []
+                },
+                "content": {
+                  "type": "string",
+                  "description": "Additional content for FTS (tags, maintainer, etc.)",
+                  "constraints": []
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

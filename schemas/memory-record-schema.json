@@ -1,0 +1,100 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "MemoryRecord",
+  "description": "A memory record capturing lessons learned from PR analysis",
+  "type": "object",
+  "required": ["lesson", "lesson_type", "lesson_fingerprint", "scope", "evidence_refs", "inferred", "promotion_state", "first_seen_at", "last_seen_at"],
+  "properties": {
+    "lesson": {
+      "type": "string",
+      "description": "The lesson or insight text"
+    },
+    "lesson_type": {
+      "type": "string",
+      "enum": ["what_worked", "could_be_better", "avoid_next_time", "maintainer_preference", "reviewer_objection", "test_expectation", "repo_convention"],
+      "description": "Category of the lesson"
+    },
+    "lesson_fingerprint": {
+      "type": "string",
+      "description": "Stable hash/fingerprint uniquely identifying this lesson across runs"
+    },
+    "scope": {
+      "type": "object",
+      "required": ["repo", "subsystem", "file_globs", "maintainer", "confidence", "recurrence_count"],
+      "properties": {
+        "repo": {
+          "type": ["string", "null"],
+          "description": "Repo identifier (org/repo) or null for universal scope"
+        },
+        "subsystem": {
+          "type": ["string", "null"],
+          "description": "Subsystem or component name"
+        },
+        "file_globs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Glob patterns matching affected files"
+        },
+        "maintainer": {
+          "type": ["string", "null"],
+          "description": "Maintainer identifier (GitHub handle)"
+        },
+        "confidence": {
+          "type": "string",
+          "enum": ["low", "medium", "high"],
+          "description": "Confidence level in this lesson"
+        },
+        "recurrence_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of times this lesson has been observed"
+        }
+      },
+      "additionalProperties": false
+    },
+    "evidence_refs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "ref_id"],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["postmortem", "artifact", "run", "review", "ci"],
+            "description": "Type of evidence reference"
+          },
+          "ref_id": {
+            "type": "string",
+            "description": "Identifier for the referenced evidence"
+          },
+          "artifact_id": {
+            "type": "string",
+            "description": "Artifact identifier"
+          }
+        },
+        "additionalProperties": false
+      },
+      "description": "References to supporting evidence"
+    },
+    "inferred": {
+      "type": "boolean",
+      "description": "Whether this lesson was inferred (not explicitly stated)"
+    },
+    "promotion_state": {
+      "type": "string",
+      "enum": ["candidate", "active", "suppressed", "invalidated"],
+      "description": "Current promotion state of this memory record"
+    },
+    "first_seen_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp when first observed"
+    },
+    "last_seen_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp when last observed"
+    }
+  },
+  "additionalProperties": false
+}
