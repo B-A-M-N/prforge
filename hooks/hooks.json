@@ -14,6 +14,17 @@
         ]
       },
       {
+        "description": "PRForge phase gate enforcer — blocks out-of-envelope tool usage per phase",
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/phase-gate-enforcer.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
         "description": "PRForge phase boundary enforcer — blocks illegal phase transitions in state.json writes",
         "matcher": "Write",
         "hooks": [

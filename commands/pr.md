@@ -1,7 +1,16 @@
 ---
 name: pr
 description: "PRForge — delegated PR execution harness. Handles any PR, issue, review link, or contribution task end-to-end. Only stops for approval before publishing."
+allowed-tools: Read, Write, Edit, Bash, Grep, Glob, WebFetch, Agent
 ---
+
+<!-- 
+PRForge Gate-Scoped Autonomy Model:
+- This command declares ALL tools the agent may need across all phases
+- The phase-boundary hook (phase-boundary.sh) enforces per-phase tool restrictions
+- Allowed actions pass silently; out-of-envelope actions get redirected, not killed
+- Gate transitions require checkpoint satisfaction, not per-action approval
+-->
 
 # /pr — PRForge Entry Point
 

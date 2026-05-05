@@ -81,6 +81,51 @@ INTAKE → CONTRACT → REPRODUCE → IMPLEMENT → VALIDATE → SELF_REVIEW →
 | **MEMORY_INDEX** | Index lessons into durable memory, rebuild FTS. | Progress note |
 | **COMPLETE** | Run finished, memory indexed. | Confirmation |
 
+## Gate-Scoped Autonomy
+
+**Core principle: "Approve gate → agent can do approved things until next gate."**
+
+Once a phase gate is satisfied, the agent operates freely within that phase's envelope. No per-action user approval is needed for work that fits the current phase contract.
+
+### How it works
+
+1. **PRForge command declares expected tools** in frontmatter (`allowed-tools: Read, Write, Edit, Bash, ...`)
+2. **PRForge writes a checkpoint** (state.json) defining the current phase, allowed paths, allowed actions, blocked actions
+3. **PreToolUse hook (`phase-gate-enforcer.sh`)** checks every Bash command against the current phase
+4. **Allowed actions pass silently** — no user prompt
+5. **Out-of-envelope actions get redirected** — hook blocks with a message explaining what's allowed
+6. **Gate transitions require checkpoint satisfaction** — the agent cannot skip phases
+
+### Phase tool envelope
+
+| Phase | Allowed | Blocked |
+|-------|---------|---------|
+| **INTAKE / CONTRACT / REPRODUCE / INVESTIGATE** | Read, Grep, Glob, WebFetch, git log/diff/show/status | git push/commit/merge, gh pr create/comment, any write outside artifacts |
+| **IMPLEMENT** | Read, Write, Edit, Bash (tests), git commit (local) | git push, gh pr *, any file outside allowed_paths |
+| **VALIDATE** | Read, Bash (test commands), git diff | git push/commit, gh pr * |
+| **SELF_REVIEW / PACKAGE** | Read, Write (artifacts), Edit (artifacts) | git push/commit, gh pr * |
+| **APPROVAL** | Read, Write (state updates) | git push (unless in approved_actions), gh pr create (unless in approved_actions) |
+| **POSTMORTEM / MEMORY_INDEX / COMPLETE** | Read, Write (memory artifacts) | git push/commit, gh pr * |
+| **BLOCKED / ABORTED** | Read, git status/diff/log | All git write, all gh pr |
+
+### What gets blocked vs redirected
+
+- **Blocked (hard)**: git push in IMPLEMENT, gh pr create in VALIDATE, editing files outside allowed_paths
+- **Redirected (soft)**: Agent tries to advance phase without satisfying gate → hook returns "Not allowed in current gate. Satisfy the exit criteria first."
+- **Silent pass**: Everything within the envelope — no user prompt
+
+### The wrong model
+```
+Approve PRForge once → agent can do anything
+```
+
+### The right model
+```
+Approve gate → agent can do approved things until next gate
+```
+
+This gives real execution freedom without YOLO mode. The agent works autonomously within each phase boundary, and only stops at gate transitions.
+
 ## Memory Preflight (INTAKE)
 
 At INTAKE, before any investigation, query prior lessons:
