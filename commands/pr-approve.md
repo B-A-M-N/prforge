@@ -243,7 +243,8 @@ gh pr request-reviewers <pr_number> --reviewer <username>
 1. Update `state.json`:
    ```json
    {
-     "phase": "SHIPPED",
+     "phase": "POSTMORTEM",
+     "outcome": "<MERGED|CLOSED|ABANDONED|REVERTED>",
      "release": { "ready": false },
      "approval": { "stale": false }
    }
@@ -253,6 +254,16 @@ gh pr request-reviewers <pr_number> --reviewer <username>
    - "Created PR: https://github.com/org/repo/pull/N"
    - "Posted review response to PR #N"
 3. If the action created a URL (PR, comment), include it in the confirmation.
+
+## Step 4: Memory Continuation
+
+After updating state.json to POSTMORTEM:
+1. The POSTMORTEM phase will run automatically (or on next `/pr-continue`)
+2. Postmortem analysis generates lessons from the PR cycle
+3. MEMORY_INDEX promotes evidence-backed lessons to durable memory
+4. COMPLETE finishes the run
+
+The user does NOT need to trigger this — it runs as part of the normal pipeline.
 
 ## Safety rules — never violate
 
