@@ -1,13 +1,18 @@
 ---
 name: pr-distributed-local
-description: "Configure and control PRForge Local Mesh (watchtower/forge)."
+description: "Configure and control PRForge Local Mesh — vertical scaling on ONE machine (watchtower + workers on same box)."
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep
 ---
 
-# /pr-distributed-local — PRForge Local Mesh Setup and Control
+# /pr-distributed-local — PRForge Local Mesh (Vertical Scaling, Single Machine)
 
 You are executing a PRForge Local Mesh command.
-This runs 3 Claude Code instances on the SAME machine.
+This runs multiple Claude Code instances on the SAME machine:
+- One watchtower (coordinator + auditor)
+- One or more forge workers (editing agents)
+
+This is VERTICAL scaling: more workers on one box.
+For HORIZONTAL scaling (multiple machines on LAN), use /pr-distributed.
 
 Follow these instructions exactly. Use your Write and Bash tools to create real files on disk.
 

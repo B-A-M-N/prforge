@@ -3,6 +3,20 @@
 This document supplements SKILL.md when distributed mode is active.
 Read this ONLY if `.prforge/distributed.json` exists in the target repo.
 
+## Scaling Models
+
+PRForge supports two distributed scaling models:
+
+**Horizontal Scaling (`/pr-distributed`)** — Multiple machines on the same LAN.
+- Watchtower on one machine (coordinator + auditor)
+- Workers on other machines (editing agents)
+- More machines = more capacity
+
+**Vertical Scaling (`/pr-distributed-local`)** — Multiple Claude instances on ONE machine.
+- Watchtower + workers all on same box
+- Single machine handles coordination and execution
+- No network dependencies, simpler setup
+
 ## What distributed mode changes
 
 1. **Job source** — task arrives via `.prforge/inbox/job.json` instead of user command.

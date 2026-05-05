@@ -1,12 +1,18 @@
 ---
 name: pr-distributed
-description: "Configure and control PRForge LAN Mesh (watchtower/forge)."
+description: "Configure and control PRForge LAN Mesh — horizontal scaling across MULTIPLE machines (watchtower on one, workers on others)."
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep
 ---
 
-# /pr-distributed — PRForge LAN Mesh Setup and Control
+# /pr-distributed — PRForge LAN Mesh (Horizontal Scaling, Multiple Machines)
 
 You are executing a PRForge LAN Mesh command.
+This distributes work across MULTIPLE machines on the same LAN:
+- Watchtower runs on one machine (coordinator + auditor)
+- Workers run on other machines (editing agents)
+
+This is HORIZONTAL scaling: more machines on the network.
+For VERTICAL scaling (multiple instances on one machine), use /pr-distributed-local.
 Follow these instructions exactly. Use your Write and Bash tools to create real files on disk.
 
 ## Parse the argument
