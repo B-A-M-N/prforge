@@ -89,12 +89,21 @@ Once a phase gate is satisfied, the agent operates freely within that phase's en
 
 ### How it works
 
-1. **PRForge command declares expected tools** in frontmatter (`allowed-tools: Read, Write, Edit, Bash, ...`)
+1. **PRForge command declares expected tools** in frontmatter (`allowed-tools: Read, Write, Edit, Bash, Grep, Glob, WebFetch, Agent, Task`)
 2. **PRForge writes a checkpoint** (state.json) defining the current phase, allowed paths, allowed actions, blocked actions
-3. **PreToolUse hook (`phase-gate-enforcer.sh`)** checks every Bash command against the current phase
-4. **Allowed actions pass silently** — no user prompt
-5. **Out-of-envelope actions get redirected** — hook blocks with a message explaining what's allowed
-6. **Gate transitions require checkpoint satisfaction** — the agent cannot skip phases
+3. **Main agent spawns a Task subagent** to execute the pipeline — subagents operate autonomously without per-action permission prompts
+4. **PreToolUse hook (`phase-gate-enforcer.sh`)** checks every Bash command against the current phase — blocks out-of-envelope, allows in-envelope silently
+5. **Allowed actions pass silently** — no user prompt
+6. **Out-of-envelope actions get redirected** — hook blocks with a message explaining what's allowed
+7. **Gate transitions require checkpoint satisfaction** — enforced by `phase-boundary.sh` hook
+
+### Why Task subagents?
+
+Claude Code agents have broader autonomous tool access than commands. By spawning a Task subagent to execute the pipeline:
+- The subagent can use any tool it determines is necessary within the gate
+- Bash commands within the phase envelope don't trigger permission prompts
+- Hooks still enforce boundaries (block redirect for out-of-envelope actions)
+- The main agent only intervenes at gate transitions and APPROVAL
 
 ### Phase tool envelope
 
