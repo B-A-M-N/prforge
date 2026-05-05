@@ -157,8 +157,10 @@ ALLOWED_TRANSITIONS=(
   "PACKAGE:INVESTIGATE"         # corrective: review became stale mid-package
   "PACKAGE:REVIEW_REFRESH"
   "PACKAGE:ARTIFACT_REPAIR"
-  "APPROVAL:SHIPPED"
-  "APPROVAL:SHIPPED_PENDING"
+  "APPROVAL:POSTMORTEM"
+  "APPROVAL:POSTMORTEM"
+  "POSTMORTEM:MEMORY_INDEX"
+  "MEMORY_INDEX:COMPLETE"
   "APPROVAL:PACKAGE"            # corrective: approval fingerprint stale
   "APPROVAL:INVESTIGATE"        # corrective: new review comments since last fetch
   "APPROVAL:REVIEW_REFRESH"
@@ -167,7 +169,7 @@ ALLOWED_TRANSITIONS=(
   "APPROVAL:POLL_CI"
   "APPROVAL:COMMIT_REPAIR"
   "APPROVAL:STYLE_REPAIR"
-  "POLL_CI:SHIPPED"
+  "POLL_CI:POSTMORTEM"
   "POLL_CI:APPROVAL"
   "POLL_CI:PACKAGE"
   "COMMIT_REPAIR:APPROVAL"
@@ -176,9 +178,9 @@ ALLOWED_TRANSITIONS=(
   "STYLE_REPAIR:APPROVAL"
   "STYLE_REPAIR:IMPLEMENT"
   "STYLE_REPAIR:VALIDATE"
-  "SHIPPED_PENDING:SHIPPED"
-  "SHIPPED_PENDING:BLOCKED"
-  "SHIPPED:BLOCKED"
+  "COMPLETE:BLOCKED"
+  "COMPLETE:BLOCKED"
+  "COMPLETE:BLOCKED"
 )
 
 if is_repair_state "$NEW_PHASE"; then
@@ -499,6 +501,74 @@ PY
   fi
 fi
 
+
+# --- APPROVAL → POSTMORTEM: terminal snapshot and artifact enforcement ---
+if [ "$TRANSITION" = "APPROVAL:POSTMORTEM" ]; then
+  HARNESS_DIR="$(dirname "$FILE_PATH")"
+  RUN_DIR=""
+
+  # Determine run_dir from state
+  if command -v python3 >/dev/null 2>&1 && [ -n "$CONTENT" ]; then
+    RUN_DIR=$(echo "$CONTENT" | python3 -c "
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+    mc = d.get('memory_context', {})
+    rid = mc.get('memory_run_id', '')
+    if rid:
+        print(d.get('repo',{}).get('local_path','') + '/.prforge/runs/' + rid)
+except Exception:
+    print('')
+" 2>/dev/null || echo "")
+  fi
+
+  # Fallback: try to find run dir
+  if [ -z "$RUN_DIR" ] || [ ! -d "$RUN_DIR" ]; then
+    RUN_DIR=$(find "$HARNESS_DIR" -maxdepth 3 -name "state.json" -path "*/runs/*" 2>/dev/null | head -1 | xargs dirname 2>/dev/null || echo "")
+  fi
+
+  if [ -z "$RUN_DIR" ] || [ ! -d "$RUN_DIR" ]; then
+    echo ""
+    echo "=== PRForge Memory Gate ==="
+    echo "APPROVAL → POSTMORTEM blocked: cannot find run directory."
+    echo "Expected: .prforge/runs/<memory_run_id>/"
+    echo "Ensure memory_context.memory_run_id is set in state.json."
+    exit 1
+  fi
+
+  # Check outcome is set
+  OUTCOME=$(echo "$CONTENT" | python3 -c "
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+    print(d.get('outcome', ''))
+except Exception:
+    print('')
+" 2>/dev/null || echo "")
+
+  if [ -z "$OUTCOME" ] || [ "$OUTCOME" = "None" ]; then
+    echo ""
+    echo "=== PRForge Memory Gate ==="
+    echo "APPROVAL → POSTMORTEM blocked: outcome not set."
+    echo "Set state.json outcome to one of: MERGED, CLOSED, ABANDONED, REVERTED."
+    exit 1
+  fi
+
+  # Run terminal_snapshot.py
+  SNAPSHOT_RESULT=$(python3 "$SCRIPT_DIR/../scripts/terminal_snapshot.py" --run-dir "$RUN_DIR" --state "$FILE_PATH" 2>&1)
+  SNAPSHOT_RC=$?
+
+  if [ $SNAPSHOT_RC -ne 0 ]; then
+    echo ""
+    echo "=== PRForge Memory Gate ==="
+    echo "APPROVAL → POSTMORTEM blocked: terminal snapshot failed."
+    echo "$SNAPSHOT_RESULT"
+    exit 1
+  fi
+
+  echo "Terminal snapshot captured for POSTMORTEM transition."
+fi
+
 for allowed in "${ALLOWED_TRANSITIONS[@]}"; do
   if [ "$allowed" = "$TRANSITION" ]; then
     exit 0
@@ -524,45 +594,45 @@ echo "REDIRECTED: Cannot advance from $CURRENT_PHASE → $NEW_PHASE"
 echo ""
 
 case "$CURRENT_PHASE:$NEW_PHASE" in
-  IMPLEMENT:SELF_REVIEW|IMPLEMENT:PACKAGE|IMPLEMENT:APPROVAL|IMPLEMENT:SHIPPED*)
+  IMPLEMENT:SELF_REVIEW|IMPLEMENT:PACKAGE|IMPLEMENT:APPROVAL|IMPLEMENT:COMPLETE*)
     echo "You are in IMPLEMENT. You must advance through all intermediate phases:"
     echo ""
-    echo "  IMPLEMENT → VALIDATE → SELF_REVIEW → PACKAGE → APPROVAL → SHIPPED"
+    echo "  IMPLEMENT → VALIDATE → SELF_REVIEW → PACKAGE → APPROVAL → POSTMORTEM → MEMORY_INDEX → COMPLETE"
     echo ""
     echo "Next required phase: VALIDATE"
     echo "Action: Run the validation commands in your contract.md, write"
     echo "        validation_ledger.md, then set phase = VALIDATE."
     ;;
-  VALIDATE:PACKAGE|VALIDATE:APPROVAL|VALIDATE:SHIPPED*)
+  VALIDATE:PACKAGE|VALIDATE:APPROVAL|VALIDATE:COMPLETE*)
     echo "You are in VALIDATE. You must complete SELF_REVIEW before packaging:"
     echo ""
-    echo "  VALIDATE → SELF_REVIEW → PACKAGE → APPROVAL → SHIPPED"
+    echo "  VALIDATE → SELF_REVIEW → PACKAGE → APPROVAL → POSTMORTEM → MEMORY_INDEX → COMPLETE"
     echo ""
     echo "Next required phase: SELF_REVIEW"
     echo "Action: Load and execute the self_review.md playbook. Answer all 10"
     echo "        audit questions. Write hostile_review.md. Then set phase = SELF_REVIEW."
     ;;
-  SELF_REVIEW:APPROVAL|SELF_REVIEW:SHIPPED*)
+  SELF_REVIEW:APPROVAL|SELF_REVIEW:COMPLETE*)
     echo "You are in SELF_REVIEW. Packaging artifacts must be generated first:"
     echo ""
-    echo "  SELF_REVIEW → PACKAGE → APPROVAL → SHIPPED"
+    echo "  SELF_REVIEW → PACKAGE → APPROVAL → POSTMORTEM → MEMORY_INDEX → COMPLETE"
     echo ""
     echo "Next required phase: PACKAGE"
     echo "Action: Load and execute the package.md playbook. Generate PR body,"
     echo "        compute hashes, write approval.md. Then set phase = PACKAGE."
     ;;
-  PACKAGE:SHIPPED*|PACKAGE:APPROVAL)
+  PACKAGE:COMPLETE|PACKAGE:APPROVAL)
     # PACKAGE → APPROVAL is valid but listed as correction here just in case
     if [ "$NEW_PHASE" != "APPROVAL" ]; then
       echo "You are in PACKAGE. You must present the approval artifact to the user"
       echo "and receive explicit confirmation before shipping:"
       echo ""
-      echo "  PACKAGE → APPROVAL → SHIPPED"
+      echo "  PACKAGE → APPROVAL → POSTMORTEM → MEMORY_INDEX → COMPLETE"
       echo ""
       echo "Next required phase: APPROVAL"
       echo "Action: Present the full approval artifact from approval.md to the user."
       echo "        Ask the explicit approval question naming branch/remote/action."
-      echo "        Wait for an affirmative response before setting phase = SHIPPED."
+      echo "        Wait for an affirmative response before setting phase = COMPLETE."
     fi
     ;;
   *)
