@@ -829,8 +829,106 @@ if ! echo "$COMMIT_HYGIENE" | grep -qx "OK"; then
   exit 1
 fi
 
+# --- Loop Detection / Circuit Breaker ---
+# Track phase transition attempts to detect infinite loops
+# If the same transition fails N times in a row, block and escalate to user
+LOOP_TRACKER="$HARNESS_DIR/.prforge/loop_tracker.json"
+mkdir -p "$(dirname "$LOOP_TRACKER")" 2>/dev/null
+
+TRANSITION_KEY="${CURRENT_PHASE}:${NEW_PHASE}"
+LOOP_COUNT=0
+MAX_LOOP_ATTEMPTS=3
+
+if [ -f "$LOOP_TRACKER" ] && command -v python3 >/dev/null 2>&1; then
+  LOOP_CHECK=$(python3 - "$LOOP_TRACKER" "$TRANSITION_KEY" "$MAX_LOOP_ATTEMPTS" <<'PY'
+import json, sys, time
+from pathlib import Path
+
+tracker_path = Path(sys.argv[1])
+transition_key = sys.argv[2]
+max_attempts = int(sys.argv[3])
+
+# Load existing tracker
+tracker = {}
+if tracker_path.exists():
+    try:
+        tracker = json.load(open(tracker_path))
+    except:
+        tracker = {}
+
+# Clean up old entries (older than 1 hour)
+now = time.time()
+tracker = {k: v for k, v in tracker.items() if now - v.get("last_attempt", 0) < 3600}
+
+# Check loop count for this transition
+entry = tracker.get(transition_key, {"count": 0, "last_attempt": 0})
+count = entry["count"]
+
+if count >= max_attempts:
+    print(f"LOOP_DETECTED:{count}")
+else:
+    print("OK")
+
+# Update tracker
+tracker[transition_key] = {"count": count + 1, "last_attempt": now}
+json.dump(tracker, open(tracker_path, "w"))
+PY
+)
+  if echo "$LOOP_CHECK" | grep -q "LOOP_DETECTED"; then
+    LOOP_COUNT=$(echo "$LOOP_CHECK" | sed 's/LOOP_DETECTED://')
+    echo ""
+    echo "╔══════════════════════════════════════════════════════════════╗"
+    echo "║           PRForge Loop Detector — CIRCUIT BROKEN            ║"
+    echo "╠══════════════════════════════════════════════════════════════╣"
+    echo "║  Transition $TRANSITION_KEY failed $LOOP_COUNT times."
+    echo "║  The agent is stuck in a loop and cannot self-recover."
+    echo "╚══════════════════════════════════════════════════════════════╝"
+    echo ""
+    echo "This is a HARD BLOCK. The agent cannot retry this transition."
+    echo "Options:"
+    echo "  1. Investigate the root cause: cat $HARNESS_DIR/redirects/current.json"
+    echo "  2. Fix the underlying issue manually"
+    echo "  3. Reset the loop tracker: rm $LOOP_TRACKER"
+    echo "  4. If the redirect is wrong, update the phase contract and retry"
+    echo ""
+    # Reset the counter so the user can try again after fixing
+    python3 - "$LOOP_TRACKER" "$TRANSITION_KEY" <<'PY'
+import json, sys
+from pathlib import Path
+tracker_path = Path(sys.argv[1])
+key = sys.argv[2]
+tracker = {}
+if tracker_path.exists():
+    try:
+        tracker = json.load(open(tracker_path))
+    except:
+        pass
+tracker.pop(key, None)
+json.dump(tracker, open(tracker_path, "w"))
+PY
+    exit 1
+  fi
+fi
+
 for allowed in "${ALLOWED_TRANSITIONS[@]}"; do
   if [ "$allowed" = "$TRANSITION" ]; then
+    # Reset loop counter on successful transition
+    if [ -f "$LOOP_TRACKER" ] && command -v python3 >/dev/null 2>&1; then
+      python3 - "$LOOP_TRACKER" "$TRANSITION_KEY" <<'PY'
+import json, sys
+from pathlib import Path
+tracker_path = Path(sys.argv[1])
+key = sys.argv[2]
+tracker = {}
+if tracker_path.exists():
+    try:
+        tracker = json.load(open(tracker_path))
+    except:
+        pass
+tracker.pop(key, None)
+json.dump(tracker, open(tracker_path, "w"))
+PY
+    fi
     exit 0
   fi
 done

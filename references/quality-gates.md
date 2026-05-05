@@ -89,6 +89,9 @@ All artifacts are stored in `.prforge/` (not `.pr-harness/`).
   - Extra-not-in-plan: touched files not in plan → classify and handle per SKILL.md rules
   - `state.plan_compliance` recorded with `compliant` boolean
 - [ ] Every changed non-test source file has a corresponding test file touched or justified
+- [ ] **Commit hygiene: NO Co-authored-by, AI bylines, WIP, debug, or temp commits in branch history**
+  - `git log --format="%s%n%b"` must be clean
+  - Violations must be fixed via `git rebase -i` before advancing
 
 ### Blockers (do not advance)
 - Files outside contract modified
@@ -96,6 +99,9 @@ All artifacts are stored in `.prforge/` (not `.pr-harness/`).
 - Formatting-only changes mixed with logic changes
 - Planned files not touched (unless contract updated to remove them)
 - Untested source changes with no documented justification
+- **Review items not addressed** (review_response mode): any required_change or blocker item in review_decomposition.md not marked complete
+- **Files mentioned in review items not modified**: git diff does not show changes to files referenced by reviewer comments
+- **Commit hygiene violations**: Co-authored-by trailers, AI bylines, WIP/debug/temp commits in branch
 
 ---
 
@@ -128,6 +134,9 @@ All artifacts are stored in `.prforge/` (not `.pr-harness/`).
 ### Exit Criteria
 - [ ] Hostile review verdict is PASS
 - [ ] Edge cases handled or documented
+- [ ] **Hostile review covers all required review items** (if review_decomposition.md exists):
+  - Each required_change/blocker item has a corresponding finding in hostile_review.md
+  - No generic "PASS — all good" without per-item coverage
 
 ### Blockers (do not advance)
 - Hostile review found unresolved correctness issues
@@ -159,7 +168,7 @@ All artifacts are stored in `.prforge/` (not `.pr-harness/`).
 
 ---
 
-## APPROVAL → SHIPPED
+## APPROVAL → POSTMORTEM
 
 ### Entry Criteria
 - [ ] User explicitly approved the action
