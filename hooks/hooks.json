@@ -27,6 +27,17 @@
     ],
     "PostToolUse": [
       {
+        "description": "PRForge memory autocapture — logs events and registers artifacts after tool use",
+        "matcher": "Write|Edit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/memory-autocapture.sh\"",
+            "timeout": 10
+          }
+        ]
+      },
+      {
         "description": "PRForge GitNexus intelligence — prompts intelligence gathering after read operations when state is active",
         "matcher": "Read|Grep|Glob",
         "hooks": [

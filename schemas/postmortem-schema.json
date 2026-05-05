@@ -1,0 +1,139 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Postmortem",
+  "description": "Postmortem analysis of a PR run",
+  "type": "object",
+  "required": ["run_id", "repo", "pr_number", "branch", "outcome", "summary", "evidence", "tags", "confidence"],
+  "properties": {
+    "run_id": {
+      "type": "string",
+      "description": "Unique identifier for this PR run"
+    },
+    "repo": {
+      "type": "string",
+      "description": "Repository identifier (e.g., org/repo)"
+    },
+    "pr_number": {
+      "type": "integer",
+      "description": "Pull request number"
+    },
+    "branch": {
+      "type": "string",
+      "description": "Source branch name"
+    },
+    "outcome": {
+      "type": "string",
+      "enum": ["MERGED", "CLOSED", "ABANDONED", "REVERTED"],
+      "description": "Final outcome of the PR"
+    },
+    "merged_at": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "ISO 8601 timestamp when PR was merged (null if not merged)"
+    },
+    "summary": {
+      "type": "object",
+      "required": ["what_was_done", "could_be_better", "avoid_next_time", "maintainer_preferences"],
+      "properties": {
+        "what_was_done": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "List of things that went well"
+        },
+        "could_be_better": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "List of things that could be improved"
+        },
+        "avoid_next_time": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "List of things to avoid in future PRs"
+        },
+        "maintainer_preferences": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["preference", "inferred", "evidence"],
+            "properties": {
+              "preference": {
+                "type": "string",
+                "description": "The maintainer preference or convention"
+              },
+              "inferred": {
+                "type": "boolean",
+                "description": "Whether this preference was inferred (vs explicitly stated)"
+              },
+              "evidence": {
+                "type": "string",
+                "description": "Evidence supporting this preference"
+              }
+            }
+          },
+          "description": "Maintainer preferences learned from this PR"
+        }
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type"],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["review_comment", "ci_run", "commit", "diff_stats"],
+            "description": "Type of evidence"
+          },
+          "review_comment": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "url": { "type": "string", "format": "uri" },
+              "quote": { "type": "string" },
+              "file": { "type": "string" }
+            }
+          },
+          "ci_run": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "conclusion": { "type": "string" },
+              "url": { "type": "string", "format": "uri" }
+            }
+          },
+          "commit": {
+            "type": "object",
+            "properties": {
+              "sha": { "type": "string" },
+              "files": {
+                "type": "array",
+                "items": { "type": "string" }
+              }
+            }
+          },
+          "diff_stats": {
+            "type": "object",
+            "properties": {
+              "files_changed": { "type": "integer" },
+              "additions": { "type": "integer" },
+              "deletions": { "type": "integer" }
+            }
+          }
+        }
+      },
+      "description": "Typed references supporting the postmortem analysis"
+    },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "String tags categorizing this postmortem"
+    },
+    "confidence": {
+      "type": "string",
+      "enum": ["low", "medium", "high"],
+      "description": "Confidence level in this postmortem analysis"
+    }
+  },
+  "additionalProperties": false
+}

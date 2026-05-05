@@ -7,14 +7,20 @@
     "version": { "type": "string", "const": "1.0" },
     "phase": {
       "type": "string",
-      "enum": ["INTAKE", "INVESTIGATE", "PLAN", "IMPLEMENT",
+      "enum": ["INTAKE", "CONTRACT", "REPRODUCE", "IMPLEMENT",
                "VALIDATE", "SELF_REVIEW", "PACKAGE", "APPROVAL",
-               "SHIPPED", "ABORTED", "BLOCKED",
+               "POSTMORTEM", "MEMORY_INDEX", "COMPLETE",
+               "ABORTED", "BLOCKED",
                "SCOPE_RECONCILE", "STATE_SYNC_REPAIR",
                "LEASE_RENEWAL_REPAIR", "REVIEW_REFRESH",
                "CONTRACT_UPDATE", "PLAN_UPDATE",
                "VALIDATION_REPAIR", "INTELLIGENCE_REPAIR", "ARTIFACT_REPAIR",
                "COORDINATOR_RECONCILE"]
+    },
+    "outcome": {
+      "type": ["string", "null"],
+      "enum": [null, "MERGED", "CLOSED", "ABANDONED", "REVERTED"],
+      "description": "Terminal outcome, set independently of phase"
     },
     "repo": {
       "type": "object",
@@ -353,6 +359,27 @@
       }
     },
     "started_at": { "type": "string", "format": "date-time" },
-    "last_updated": { "type": "string", "format": "date-time" }
+    "last_updated": { "type": "string", "format": "date-time" },
+    "memory_context": {
+      "type": "object",
+      "properties": {
+        "memory_run_id": { "type": "string", "description": "UUID generated at INTAKE" },
+        "tracking_enabled": { "type": "boolean" },
+        "preflight_warnings": { "type": "object" },
+        "preflight_checked_at": { "type": "string", "format": "date-time" },
+        "indexed_at": { "type": "string", "format": "date-time" },
+        "memory_count": { "type": "integer", "description": "Number of memory_records inserted or updated from this run's postmortem" }
+      },
+      "required": ["memory_run_id", "tracking_enabled"]
+    },
+    "postmortem": {
+      "type": "object",
+      "properties": {
+        "generated": { "type": "boolean" },
+        "file": { "type": "string", "description": "Path to the generated postmortem.json" },
+        "indexed": { "type": "boolean" },
+        "confidence": { "type": "string" }
+      }
+    }
   }
 }

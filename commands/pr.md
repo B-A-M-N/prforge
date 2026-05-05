@@ -25,16 +25,36 @@ The user has provided: {{ARGS}}
    - If found, read it and resume from the current phase.
    - If not found, start from INTAKE.
 
-3. **Execute the full pipeline** from the current phase through to APPROVAL:
-   - INTAKE → INVESTIGATE → PLAN → IMPLEMENT → VALIDATE → SELF_REVIEW → PACKAGE → APPROVAL
+3. **At INTAKE, run memory preflight** before any investigation:
+   ```bash
+   python3 $PRFORGE_HOME/scripts/preflight_injector.py inject \
+     --repo <org/repo> \
+     --files "<changed_files>" \
+     --issue-type <bug|feature|docs|test|refactor>
+   ```
+   Inject relevant prior lessons into INTAKE context. If prior lessons exist, present them as:
+   ```
+   Relevant prior lessons:
+   - [repo-scoped: org/repo, subsystem X]: <lesson>
+     Evidence: PR #123 review comment
+   ```
+
+4. **Execute the full pipeline** from the current phase through to COMPLETE:
+   - INTAKE → CONTRACT → REPRODUCE → IMPLEMENT → VALIDATE → SELF_REVIEW → PACKAGE → APPROVAL
+   - After APPROVAL (user approves and action executes): POSTMORTEM → MEMORY_INDEX → COMPLETE
    - Do NOT ask the user to drive each phase. Run them automatically.
    - Show brief progress notes as you work.
 
-4. **At APPROVAL:** Write `.prforge/approval.md` and present it to the user.
+5. **At APPROVAL:** Write `.prforge/approval.md` and present it to the user.
    - Keep it scannable — the user should understand it in 15 seconds.
    - Wait for explicit approval before any upstream-facing action.
 
-5. **After approval:** Execute exactly what was approved. Confirm what was done.
+6. **After approval:** Execute exactly what was approved. Then continue:
+   - Set `outcome` in state.json (MERGED/CLOSED/ABANDONED/REVERTED) based on result
+   - Advance to POSTMORTEM phase
+   - Run postmortem analysis
+   - Index lessons into memory
+   - Confirm to the user what was learned
 
 ## Key rules
 
@@ -43,3 +63,4 @@ The user has provided: {{ARGS}}
 - If you hit a blocker, present it clearly with a suggested fix.
 - Never claim tests passed unless actually run.
 - Keep progress notes brief. Put details in `.prforge/` artifacts.
+- Memory phases (POSTMORTEM, MEMORY_INDEX) run automatically after APPROVAL — do not ask the user to trigger them.

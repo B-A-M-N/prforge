@@ -1,7 +1,7 @@
 {
   "name": "prforge",
-  "version": "1.2.1",
-  "description": "Professional PR contribution harness — delegated execution with guarded release. Forces repo intelligence, scope contracts, validation honesty, and git safety before any upstream-facing action. Includes optional distributed mesh mode.",
+  "version": "1.3.0",
+  "description": "Professional PR contribution harness — delegated execution with guarded release. Forces repo intelligence, scope contracts, validation honesty, and git safety before any upstream-facing action. Includes optional distributed mesh mode and PR lifecycle memory system.",
   "author": {
     "name": "BAMN",
     "email": "bamn@live.com"
@@ -9,5 +9,27 @@
   "commands": "./commands/",
   "skills": "./skills/",
   "hooks": "./hooks/hooks.json",
-  "monitors": "./monitors/monitors.json"
+  "monitors": "./monitors/monitors.json",
+  "memory": {
+    "enabled": true,
+    "database_path": "${PRFORGE_MEMORY_DB:-$HOME/.prforge/prforge_memory.db}",
+    "auto_index": true,
+    "retention_days": 365
+  },
+  "contributes": {
+    "schemas": [
+      {
+        "fileMatch": ["postmortem.json"],
+        "url": "./schemas/postmortem-schema.json"
+      },
+      {
+        "fileMatch": ["memory-record.json"],
+        "url": "./schemas/memory-record-schema.json"
+      },
+      {
+        "fileMatch": ["memory-ledger.json"],
+        "url": "./schemas/memory-ledger-schema.json"
+      }
+    ]
+  }
 }

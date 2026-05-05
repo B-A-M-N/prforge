@@ -62,9 +62,9 @@ Every PRForge run follows this internal pipeline. You execute it automatically.
 You do NOT ask the user to drive each phase.
 
 ```
-INTAKE → INVESTIGATE → PLAN → IMPLEMENT → VALIDATE → SELF_REVIEW → PACKAGE → APPROVAL
+INTAKE → CONTRACT → REPRODUCE → IMPLEMENT → VALIDATE → SELF_REVIEW → PACKAGE → APPROVAL
                                                                          ↓
-                                                                       SHIPPED
+                              POSTMORTEM → MEMORY_INDEX → COMPLETE
 ```
 
 | Phase | What happens | User sees |
@@ -77,7 +77,29 @@ INTAKE → INVESTIGATE → PLAN → IMPLEMENT → VALIDATE → SELF_REVIEW → P
 | **SELF_REVIEW** | Hostile audit of own diff. Scope, correctness, validation honesty, git safety. | Progress note |
 | **PACKAGE** | Generate PR body, review response, commit message. | Progress note |
 | **APPROVAL** | Present the approval artifact. Wait for user decision. | **Approval screen** |
-| **SHIPPED** | Execute the approved action (push, post, create PR). | Confirmation |
+| **POSTMORTEM** | Analyze PR lifecycle, generate postmortem with evidence. | Progress note |
+| **MEMORY_INDEX** | Index lessons into durable memory, rebuild FTS. | Progress note |
+| **COMPLETE** | Run finished, memory indexed. | Confirmation |
+
+## Memory Preflight (INTAKE)
+
+At INTAKE, before any investigation, query prior lessons:
+
+```bash
+python3 $PRFORGE_HOME/scripts/preflight_injector.py inject \
+  --repo <org/repo> \
+  --files "<changed_files>" \
+  --issue-type <bug|feature|docs|test|refactor>
+```
+
+Inject relevant prior lessons into INTAKE context. If prior lessons exist, present them as:
+```
+Relevant prior lessons:
+- [repo-scoped: org/repo, subsystem X]: <lesson>
+  Evidence: PR #123 review comment
+```
+
+No scope label = no injection.
 
 ## Coding Discipline (Mandatory Enforcement)
 
@@ -109,7 +131,7 @@ or conflicting maintainer direction.
 
 Normal forward path:
 ```
-INTAKE → INVESTIGATE → PLAN → IMPLEMENT → VALIDATE → SELF_REVIEW → PACKAGE → APPROVAL → SHIPPED
+INTAKE → CONTRACT → REPRODUCE → IMPLEMENT → VALIDATE → SELF_REVIEW → PACKAGE → APPROVAL → POSTMORTEM → MEMORY_INDEX → COMPLETE
 ```
 
 Allowed corrective loops:
@@ -135,8 +157,20 @@ Repair states:
 - `STYLE_REPAIR`
 - `COMMIT_REPAIR`
 - `POLL_CI`
+- `POSTMORTEM`
+- `MEMORY_INDEX`
 
-No other transitions are valid. Shipping actions (`git push`, `gh pr create`, `gh pr comment`) are only permitted from SHIPPED and only after explicit user approval was recorded in the current session.
+No other transitions are valid. Shipping actions (`git push`, `gh pr create`, `gh pr comment`) are only permitted from APPROVAL and only after explicit user approval was recorded in the current session.
+
+### Outcome vs Phase
+
+`outcome` is a separate field from `phase`. It records the terminal result of the PR:
+- `MERGED` — PR was merged upstream
+- `CLOSED` — PR was closed without merge
+- `ABANDONED` — work was abandoned before submission
+- `REVERTED` — PR was merged but later reverted
+
+Outcome is set independently of phase. The POSTMORTEM phase reads the outcome to generate the postmortem. The phase always advances: APPROVAL → POSTMORTEM → MEMORY_INDEX → COMPLETE regardless of outcome.
 
 ### Phase Gate Rules — Non-Negotiable
 
