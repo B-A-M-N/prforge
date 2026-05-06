@@ -70,6 +70,17 @@ def lease_branch(c: str, repo_slug: str, branch: str) -> str:
 def lease_worker(c: str, node_id: str) -> str:
     return key(c, "lease", "worker", node_id)
 
+def lease_path(c: str, repo_slug: str, rel_path: str) -> str:
+    safe = rel_path.replace("\\", "/").lstrip("/")
+    return key(c, "lease", "path", repo_slug.replace("/", "_"), safe)
+
+def lease_target(c: str, repo_slug: str, target_type: str, target_number: str) -> str:
+    return key(c, "lease", "target", repo_slug.replace("/", "_"), target_type, target_number)
+
+def lease_public(c: str, repo_slug: str, branch_or_pr: str) -> str:
+    safe = branch_or_pr.replace("/", "_")
+    return key(c, "lease", "public", repo_slug.replace("/", "_"), safe)
+
 def notify_channel(c: str) -> str:
     return key(c, "notify")
 
@@ -180,6 +191,25 @@ def remove_from_pending(r: redis.Redis, cluster: str, stream_id: str) -> None:
 # Lease operations
 # ---------------------------------------------------------------------------
 
+def normalize_path_for_lease(path: str) -> str:
+    """Normalize a file path for lease key matching. Returns empty string for invalid paths."""
+    p = path.replace("\\", "/").lstrip("/")
+    if ".." in p or p.startswith("/"):
+        return ""
+    return p
+
+
+def _lease_value(worker_id: str, job_id: str, repo: str = "", path: str = "") -> str:
+    """Build JSON lease value."""
+    return json.dumps({
+        "worker_id": worker_id,
+        "job_id": job_id,
+        "repo": repo,
+        "path": path,
+        "created_at": _now(),
+    })
+
+
 def acquire_lease(r: redis.Redis, lease_k: str, value: str, ttl: int) -> bool:
     result = r.set(lease_k, value, nx=True, ex=ttl)
     return result is True
@@ -193,6 +223,52 @@ def renew_lease(r: redis.Redis, lease_k: str, ttl: int) -> bool:
     return r.expire(lease_k, ttl) == 1
 
 
+def get_lease(r: redis.Redis, lease_k: str) -> Optional[dict]:
+    """Get lease value as dict, or None if not found."""
+    val = r.get(lease_k)
+    if val is None:
+        return None
+    try:
+        return json.loads(val)
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+def acquire_path_leases(
+    r: redis.Redis,
+    cluster: str,
+    repo_slug: str,
+    paths: list[str],
+    worker_id: str,
+    job_id: str,
+    ttl: int = 600,
+) -> tuple[bool, list[str]]:
+    """
+    All-or-nothing path lease acquisition.
+    If any path lease fails, releases all acquired in this call.
+    Returns (success, list_of_blocked_paths).
+    """
+    acquired = []
+    for rel_path in paths:
+        # Normalize path
+        norm = rel_path.replace("\\", "/").lstrip("/")
+        if ".." in norm or norm.startswith("/"):
+            # Skip invalid paths — they won't match anything real
+            continue
+        lk = lease_path(cluster, repo_slug, norm)
+        val = _lease_value(worker_id, job_id, repo=repo_slug, path=norm)
+        if acquire_lease(r, lk, val, ttl):
+            acquired.append(lk)
+        else:
+            # Rollback
+            for ak in acquired:
+                release_lease(r, ak)
+            holder = get_lease(r, lk)
+            blocked_by = holder.get("worker_id", "?") if holder else "?"
+            return False, [rel_path, blocked_by]
+    return True, []
+
+
 def acquire_job_leases(
     r: redis.Redis,
     cluster: str,
@@ -201,20 +277,25 @@ def acquire_job_leases(
     ttl: int,
 ) -> tuple[bool, list[str]]:
     """
-    Atomically acquire all four leases for a job assignment.
+    Atomically acquire job, target, branch, and worker leases.
     Returns (success, list_of_acquired_keys).
     On failure, releases all acquired keys.
     """
     job_id    = job["job_id"]
     repo      = job["repo"]
-    pr        = str(job["pr_number"])
-    branch    = job["head_branch"]
+    pr        = str(job.get("pr_number", ""))
+    branch    = job.get("head_branch", "")
+    repo_slug = repo.replace("/", "_")
 
     leases = [
-        (lease_job(cluster, job_id),           node_id),
-        (lease_pr(cluster, repo, pr),           job_id),
-        (lease_branch(cluster, repo, branch),   job_id),
-        (lease_worker(cluster, node_id),        job_id),
+        (lease_job(cluster, job_id),
+         _lease_value(node_id, job_id, repo=repo)),
+        (lease_target(cluster, repo_slug, "pr", pr),
+         _lease_value(node_id, job_id, repo=repo)),
+        (lease_branch(cluster, repo_slug, branch),
+         _lease_value(node_id, job_id, repo=repo)),
+        (lease_worker(cluster, node_id),
+         _lease_value(node_id, job_id, repo=repo)),
     ]
 
     acquired = []
@@ -240,10 +321,11 @@ def renew_job_leases(
     node_id: str,
     ttl: int,
 ) -> None:
+    repo_slug = repo.replace("/", "_")
     for lk in [
         lease_job(cluster, job_id),
-        lease_pr(cluster, repo, pr),
-        lease_branch(cluster, repo, branch),
+        lease_target(cluster, repo_slug, "pr", pr),
+        lease_branch(cluster, repo_slug, branch),
         lease_worker(cluster, node_id),
     ]:
         renew_lease(r, lk, ttl)
@@ -258,13 +340,30 @@ def release_job_leases(
     branch: str,
     node_id: str,
 ) -> None:
+    repo_slug = repo.replace("/", "_")
     for lk in [
         lease_job(cluster, job_id),
-        lease_pr(cluster, repo, pr),
-        lease_branch(cluster, repo, branch),
+        lease_target(cluster, repo_slug, "pr", pr),
+        lease_branch(cluster, repo_slug, branch),
         lease_worker(cluster, node_id),
     ]:
         release_lease(r, lk)
+
+
+# ---------------------------------------------------------------------------
+# List all locks for a cluster (for status/debugging)
+# ---------------------------------------------------------------------------
+
+def list_all_leases(r: redis.Redis, cluster: str, prefix: str = "lease") -> list[dict]:
+    """List all lease keys matching Workflow:<cluster>:<prefix>:*."""
+    pattern = key(cluster, prefix, "*")
+    keys = r.keys(pattern)
+    results = []
+    for k in keys:
+        val = get_lease(r, k)
+        if val:
+            results.append({"key": k, **val})
+    return results
 
 
 # ---------------------------------------------------------------------------

@@ -25,6 +25,17 @@
         ]
       },
       {
+        "description": "PRForge mesh lock guard — enforces distributed-local worktree and lock boundaries",
+        "matcher": "Bash|Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/mesh-lock-guard.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
         "description": "PRForge phase boundary enforcer — blocks illegal phase transitions in state.json writes",
         "matcher": "Write",
         "hooks": [

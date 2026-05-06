@@ -9,10 +9,24 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep
 You are executing a PRForge LAN Mesh command.
 This distributes work across MULTIPLE machines on the same LAN:
 - Watchtower runs on one machine (coordinator + auditor)
-- Workers run on other machines (editing agents)
+- Workers run on other machines via SSH tunnel (editing agents)
 
 This is HORIZONTAL scaling: more machines on the network.
 For VERTICAL scaling (multiple instances on one machine), use /pr-distributed-local.
+
+**Architecture:**
+```
+Machine 1 (coordinator)          Machine 2 (worker)
+  ├── Redis server                 ├── SSH tunnel → Redis
+  ├── Coordinator/Auditor Claude   ├── Worker Claude
+  └── Job queue                    └── Isolated worktree
+```
+
+**Key difference from local mode:**
+- Redis on coordinator machine, workers connect via SSH tunnel
+- Each machine has its own worktree root
+- Same lock model (target, branch, path, public)
+- Workers never edit the coordinator's repo checkout
 Follow these instructions exactly. Use your Write and Bash tools to create real files on disk.
 
 ## Parse the argument

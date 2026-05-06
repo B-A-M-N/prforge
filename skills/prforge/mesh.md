@@ -9,13 +9,104 @@ PRForge supports two distributed scaling models:
 
 **Horizontal Scaling (`/pr-distributed`)** — Multiple machines on the same LAN.
 - Watchtower on one machine (coordinator + auditor)
-- Workers on other machines (editing agents)
+- Workers on other machines via SSH tunnel (editing agents)
 - More machines = more capacity
+- Each machine has its own worktree root
 
 **Vertical Scaling (`/pr-distributed-local`)** — Multiple Claude instances on ONE machine.
 - Watchtower + workers all on same box
 - Single machine handles coordination and execution
 - No network dependencies, simpler setup
+
+## Worktree Isolation (Both Models)
+
+**Core rule: Never run multiple agents in the same repo checkout.**
+
+Each worker-job gets an isolated worktree:
+```
+~/.prforge/repos/<repo>.git          # bare mirror (shared, fetch-only)
+~/.prforge/worktrees/<repo>/<job_id> # per-job writable worktree
+```
+
+The checkout broker (`scripts/mesh/checkout_broker.py`) manages this:
+```bash
+# Create isolated worktree for a job
+python3 scripts/mesh/checkout_broker.py create \
+  --repo-url https://github.com/owner/repo.git \
+  --repo-key owner/repo \
+  --job-id job_9f42a \
+  --worker-id worker-a \
+  --base-ref origin/main \
+  --target-number 3819 \
+  --task-slug mcp-client-race
+
+# List active checkouts
+python3 scripts/mesh/checkout_broker.py list
+
+# Cleanup after merge/close
+python3 scripts/mesh/checkout_broker.py cleanup --job-id job_9f42a
+
+# Quarantine dirty/stale worktree
+python3 scripts/mesh/checkout_broker.py quarantine --job-id job_9f42a
+```
+
+Branch naming scheme (unique per job):
+```
+prforge/<target-number>-<task-slug>-<short-job-id>
+Example: prforge/3819-mcp-client-race-9f42a
+```
+
+Each worktree gets a `.prforge/checkout.json` with metadata for hook verification.
+
+## Lock Model
+
+5 Redis lock types prevent conflicts:
+
+| Lock Type | Key Pattern | Purpose |
+|-----------|-------------|---------|
+| **Job** | `lease:job:<job_id>` | One worker per job |
+| **Target** | `lease:target:<repo>:pr:<number>` | One worker per PR/issue |
+| **Branch** | `lease:branch:<repo>:<branch>` | One worker per branch |
+| **Path** | `lease:path:<repo>:<file>` | One worker per file (after PLAN) |
+| **Public** | `lease:public:<repo>:<branch>` | Serialize push/PR actions |
+
+All locks use `SET key value NX PX <ttl>` with JSON values containing worker_id, job_id, timestamps.
+
+Path locks are acquired **after PLAN** using `scope.json` allowed_paths. All-or-nothing acquisition with rollback.
+
+**Core invariant:** A worker may only mutate source files when it owns the job lease, target lease, branch lease, is inside its assigned worktree, and (after PLAN) owns path leases for the files it edits.
+
+## Stale Worker Handling
+
+```
+heartbeat expires → worker marked stale → leases enter grace period
+→ dirty worktree quarantined (not deleted)
+→ job becomes RECOVERABLE_STALE
+→ coordinator decides: recover / requeue / abandon
+```
+
+Quarantine path: `~/.prforge/quarantine/<job_id>/`
+
+**Never auto-delete dirty worktrees.** Preserve for recovery.
+
+## Public Action Serialization
+
+Even with parallel workers, public GitHub actions are serialized per PR/branch:
+- Only coordinator/manager can execute `git push`, `gh pr create`, `gh pr comment`
+- Workers produce artifacts → coordinator/manager certifies and ships
+- `lease:public:<repo>:<branch>` ensures single-lane public actions
+
+## Machine-Readable Scope Artifacts
+
+Instead of parsing Markdown, the PLAN phase writes:
+
+```
+.prforge/scope.json    -- allowed/forbidden paths, lock status
+.prforge/checkout.json -- worktree, branch, job, worker (from broker)
+.prforge/locks.json    -- all lease keys held by this job
+```
+
+The `mesh-lock-guard.sh` hook reads these to enforce boundaries.
 
 ## What distributed mode changes
 
