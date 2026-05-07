@@ -107,6 +107,16 @@ def main() -> int:
             "recent_merged_prs": 6,
             "age_days": 8,
         },
+        {
+            "number": 106,
+            "title": "fix parser error already covered elsewhere",
+            "body": "duplicate of #44 and already fixed by a pending branch.",
+            "labels": ["bug", "duplicate"],
+            "assignees": [],
+            "comments": [],
+            "tests_available": True,
+            "age_days": 1,
+        },
     ]
 
     result = run_scorer(candidates)
@@ -120,26 +130,51 @@ def main() -> int:
     assert best["maintainer_confirmed"] is True
     assert any("locally testable" in r for r in best["reasons"])
     assert any("maintainer confirmed" in r for r in best["reasons"])
+    assert best["risk_level"] == "low"
+    assert best["reason_summary"]
+    assert best["testability_signal"] == "strong"
+    assert best["maintainer_signal"] == "confirmed"
+    assert best["scope_size_signal"] == "small"
+    assert best["claimed_duplicate_stale_signal"] == "clear"
+    assert "parser" in best["subsystems"]
+    assert "src/parser/" in best["likely_files"]
+    assert best["suggested_next_action"].startswith("select for investigate")
+    assert best["reject_reason"] == ""
+    assert best["filtered_out"] is False
 
     claimed = by_number(result, 103)
     assert claimed["recommendation"] == "avoid"
     assert claimed["score"] < best["score"]
     assert "claimed or assigned" in claimed["penalties"]
+    assert claimed["claimed_duplicate_stale_signal"] == "claimed"
+    assert claimed["reject_reason"] == "already claimed or assigned"
+    assert claimed["suggested_next_action"].startswith("skip:")
 
     large = by_number(result, 102)
     assert large["too_large"] is True
     assert large["score"] < best["score"]
     assert "large/refactor-like scope" in large["penalties"]
+    assert large["scope_size_signal"] == "large"
 
     stale = by_number(result, 104)
     assert stale["score"] < best["score"]
     assert "stale without maintainer confirmation" in stale["penalties"]
+    assert stale["stale"] is True
+    assert stale["claimed_duplicate_stale_signal"] == "stale"
 
     auth = by_number(result, 105)
     assert auth["high_risk"] is True
     assert auth["score"] < best["score"]
     assert "high dependency/auth/core risk" in auth["penalties"]
     assert auth["maintainer_confirmed"] is True
+    assert auth["risk_level"] == "high"
+    assert "auth" in auth["subsystems"]
+
+    duplicate = by_number(result, 106)
+    assert duplicate["recommendation"] == "avoid"
+    assert duplicate["duplicate"] is True
+    assert duplicate["reject_reason"] == "duplicate candidate"
+    assert "duplicate/already covered" in duplicate["penalties"]
 
     empty = run_scorer([])
     assert empty == {"status": "no_candidates", "candidates": []}
