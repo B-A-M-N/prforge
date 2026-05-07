@@ -74,7 +74,7 @@ def get_postmortem_summary(postmortem_json_str):
 
     Returns dict with keys: what_was_done, could_be_better, avoid_next_time,
     maintainer_preferences, and other category -> list of lesson texts.
-    Each entry is (lesson_type, lesson_text, evidence_refs).
+    Each entry is (lesson_type, lesson_text, evidence_refs, subsystem, file_globs).
     """
     try:
         pm = json.loads(postmortem_json_str)
@@ -117,17 +117,29 @@ def get_postmortem_summary(postmortem_json_str):
                 lesson_text = item
                 lesson_type = category
                 ev_refs = evidence_map.get(category, [])
+                subsystem = ""
+                file_globs = []
             elif isinstance(item, dict):
                 lesson_text = item.get("text", item.get("lesson", ""))
                 lesson_type = item.get("type", category)
                 ev_refs = extract_evidence_refs(json.dumps(item.get("evidence", [])))
                 if not ev_refs:
                     ev_refs = evidence_map.get(category, [])
+                subsystem = item.get("scope_subsystem") or item.get("subsystem") or ""
+                file_globs = item.get("file_globs") or item.get("scope_file_globs") or []
+                if isinstance(file_globs, str):
+                    file_globs = [file_globs]
             else:
                 continue
 
             if lesson_text:
-                typed_items.append((lesson_type, lesson_text.strip(), ev_refs))
+                typed_items.append((
+                    lesson_type,
+                    lesson_text.strip(),
+                    ev_refs,
+                    subsystem if isinstance(subsystem, str) else "",
+                    file_globs if isinstance(file_globs, list) else [],
+                ))
 
         if typed_items:
             results[category] = typed_items
@@ -236,9 +248,29 @@ def cmd_index(args):
 
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
+    conn.execute("""
+        INSERT OR IGNORE INTO postmortems (id, run_id, repo, pr_number, outcome,
+            summary_json, evidence_json, tags_json, confidence, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        postmortem_id, run_id, repo, postmortem_data.get("pr_number", 0),
+        postmortem_data.get("outcome", ""),
+        json.dumps(postmortem_data.get("summary", {})),
+        json.dumps(postmortem_data.get("evidence", {})),
+        json.dumps(postmortem_data.get("tags", [])),
+        confidence, now
+    ))
+    conn.commit()
+
     # Process each category
     for category, items in summary.items():
-        for lesson_type, lesson_text, evidence_refs in items:
+        for item in items:
+            if len(item) == 3:
+                lesson_type, lesson_text, evidence_refs = item
+                scope_subsystem = ""
+                file_globs = []
+            else:
+                lesson_type, lesson_text, evidence_refs, scope_subsystem, file_globs = item
             lessons_processed += 1
 
             lesson_fingerprint = compute_lesson_fingerprint(lesson_text)
@@ -263,7 +295,7 @@ def cmd_index(args):
 
             # Check for existing record with same (scope_repo, lesson_type, lesson_fingerprint)
             existing = conn.execute("""
-                SELECT id, recurrence_count, promotion_state, inferred
+                SELECT id, recurrence_count, promotion_state, inferred, evidence_artifact_ids_json
                 FROM memory_records
                 WHERE scope_repo = ? AND lesson_type = ? AND lesson_fingerprint = ?
             """, (repo or "", lesson_type, lesson_fingerprint)).fetchone()
@@ -292,9 +324,14 @@ def cmd_index(args):
                     SET recurrence_count = ?,
                         last_seen_at = ?,
                         promotion_state = ?,
-                        evidence_artifact_ids_json = ?
+                        evidence_artifact_ids_json = ?,
+                        scope_subsystem = ?,
+                        scope_file_globs_json = ?
                     WHERE id = ?
-                """, (new_count, now, new_state, json.dumps(sorted(all_evidence)), record_id))
+                """, (
+                    new_count, now, new_state, json.dumps(sorted(all_evidence)),
+                    scope_subsystem, json.dumps(file_globs), record_id
+                ))
 
                 print(f"  UPDATED: lesson (recurrence {old_count} -> {new_count}), state={new_state}")
                 memory_count += 1
@@ -340,8 +377,8 @@ def cmd_index(args):
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     record_id, postmortem_id, run_id, lesson_text, lesson_type,
-                    lesson_fingerprint, repo or "", "",
-                    json.dumps([]), json.dumps(sorted(valid_artifact_refs)),
+                    lesson_fingerprint, repo or "", scope_subsystem,
+                    json.dumps(file_globs), json.dumps(sorted(valid_artifact_refs)),
                     confidence, 0 if should_promote else 1, initial_state,
                     1, now, now, None, now
                 ))
