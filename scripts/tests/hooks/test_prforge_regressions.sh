@@ -56,6 +56,30 @@ for hook in "$ROOT"/hooks/*.sh "$ROOT"/monitors/*.sh; do
 done
 pass "shell syntax"
 
+if grep -R "hook_events.log" "$ROOT/hooks" >/dev/null 2>&1; then
+  fail "hooks still write diagnostic hook_events.log in the repo hot path"
+fi
+pass "hooks avoid repo-local diagnostic event writes"
+
+QUIET_REPO="$TMP/quiet-repo"
+mkdir -p "$QUIET_REPO"
+git -C "$QUIET_REPO" init -q
+git -C "$QUIET_REPO" config user.email audit@example.com
+git -C "$QUIET_REPO" config user.name Audit
+printf 'quiet\n' > "$QUIET_REPO/q.txt"
+git -C "$QUIET_REPO" add q.txt
+git -C "$QUIET_REPO" commit -q -m init
+(
+  cd "$QUIET_REPO"
+  printf '{"tool_name":"Read","tool_input":{"file_path":"q.txt"}}' | bash "$ROOT/hooks/gitnexus-intelligence.sh" >/dev/null 2>/dev/null
+  printf '{"tool_name":"Edit","tool_input":{"file_path":"q.txt"}}' | bash "$ROOT/hooks/phase-boundary.sh" >/dev/null 2>/dev/null
+  printf '{"tool_name":"Write","tool_input":{"file_path":"q.txt"}}' | bash "$ROOT/hooks/blast-radius.sh" >/dev/null 2>/dev/null
+)
+if [ -e "$QUIET_REPO/.prforge-run" ] || [ -e "$QUIET_REPO/.prforge" ]; then
+  fail "read-only/inactive hooks created PRForge repo-local state"
+fi
+pass "inactive hooks do not create repo-local state"
+
 SAFE_JSON='{"tool_name":"Bash","tool_input":{"command":"git status --short"}}'
 if ! printf '%s' "$SAFE_JSON" | bash "$ROOT/hooks/phase-gate-enforcer.sh" >"$TMP/safe.out" 2>"$TMP/safe.err"; then
   fail "phase gate blocked safe git status"
