@@ -1,6 +1,6 @@
 #!/bin/bash
 # PRForge Phase Boundary Enforcer
-# Fires as PreToolUse on Write — intercepts state.json writes and validates
+# Fires as PreToolUse on Write/Edit/MultiEdit — intercepts state.json writes and validates
 # that the requested phase transition is in the allowed table.
 # Exits 1 (blocking) on illegal jumps. Exits 0 otherwise.
 
@@ -9,10 +9,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=hooks/prforge-common.sh
 . "$SCRIPT_DIR/prforge-common.sh"
-
-# Diagnostic: log hook invocation (minimal, for validation only)
-mkdir -p "$(git rev-parse --show-toplevel 2>/dev/null)/.prforge" 2>/dev/null
-echo "$(date -Iseconds) [phase-boundary] Write hook fired" >> "$(git rev-parse --show-toplevel 2>/dev/null)/.prforge/hook_events.log" 2>/dev/null || true
 
 HOOK_JSON=$(cat)
 
@@ -36,13 +32,51 @@ case "$FILE_PATH" in
   "$PRFORGE_ROOT"/*|*/.prforge/state.json|*/.prforge/runs/*/state.json) ;;
   *) exit 0 ;;
 esac
+HARNESS_DIR="$(dirname "$FILE_PATH")"
 
-# --- Parse new phase from content being written ---
+# --- Parse new phase from content being written/edited ---
 CONTENT=""
 if command -v jq >/dev/null 2>&1; then
   CONTENT=$(echo "$HOOK_JSON" | jq -r '.tool_input.content // empty' 2>/dev/null || echo "")
 elif command -v python3 >/dev/null 2>&1; then
   CONTENT=$(echo "$HOOK_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('tool_input',{}).get('content',''))" 2>/dev/null || echo "")
+fi
+
+if [ -z "$CONTENT" ] && [ -f "$FILE_PATH" ] && command -v python3 >/dev/null 2>&1; then
+  CONTENT=$(PRFORGE_HOOK_JSON="$HOOK_JSON" python3 - "$FILE_PATH" <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+try:
+    raw = path.read_text()
+    hook = json.loads(os.environ.get("PRFORGE_HOOK_JSON", "{}"))
+    tool_input = hook.get("tool_input") or {}
+
+    edits = tool_input.get("edits")
+    if isinstance(edits, list):
+        for edit in edits:
+            old = edit.get("old_string")
+            new = edit.get("new_string")
+            if not isinstance(old, str) or not isinstance(new, str) or old not in raw:
+                print("")
+                raise SystemExit(0)
+            raw = raw.replace(old, new, 1)
+        print(raw)
+        raise SystemExit(0)
+
+    old = tool_input.get("old_string")
+    new = tool_input.get("new_string")
+    if isinstance(old, str) and isinstance(new, str) and old in raw:
+        print(raw.replace(old, new, 1))
+    else:
+        print("")
+except Exception:
+    print("")
+PY
+  2>/dev/null || echo "")
 fi
 
 NEW_PHASE=""
@@ -57,9 +91,27 @@ except Exception:
 " 2>/dev/null || echo "")
 fi
 
-# If we can't parse the new phase, allow the write (don't block on parse failures)
+# state.json must remain parseable and phase-bearing; otherwise an Edit can bypass
+# every phase gate by hiding the resulting phase from this hook.
 if [ -z "$NEW_PHASE" ]; then
-  exit 0
+  echo ""
+  echo "=== PRForge Phase Boundary Blocked ==="
+  echo "Could not parse phase from pending state.json change."
+  echo "Use a full valid state.json Write/Edit/MultiEdit that preserves the top-level phase field."
+  exit 1
+fi
+
+STATE_SCHEMA_CHECK=$(TMP_STATE=$(mktemp "${TMPDIR:-/tmp}/prforge-pending-state.XXXXXX.json") && \
+  printf "%s" "$CONTENT" > "$TMP_STATE" && \
+  python3 "$SCRIPT_DIR/../scripts/prforge_state.py" migrate "$TMP_STATE" >/dev/null 2>&1 && \
+  python3 "$SCRIPT_DIR/../scripts/prforge_state.py" validate "$TMP_STATE" 2>&1; \
+  rc=$?; rm -f "$TMP_STATE"; exit $rc)
+if ! echo "$STATE_SCHEMA_CHECK" | grep -qx "OK"; then
+  echo ""
+  echo "=== PRForge Phase Boundary Blocked ==="
+  echo "Pending state.json does not match the PRForge state schema."
+  echo "$STATE_SCHEMA_CHECK"
+  exit 1
 fi
 
 # --- Read current phase from existing state.json ---
@@ -93,7 +145,7 @@ REPAIR_STATES=(
   "STATE_SYNC_REPAIR"
   "LEASE_RENEWAL_REPAIR"
   "REVIEW_REFRESH"
-  "CONTRACT_UPDATE"
+  "SCOPE_UPDATE"
   "PLAN_UPDATE"
   "VALIDATION_REPAIR"
   "INTELLIGENCE_REPAIR"
@@ -123,6 +175,7 @@ ALLOWED_TRANSITIONS=(
   "INVESTIGATE:PLAN"
   "INVESTIGATE:INTELLIGENCE_REPAIR"
   "PLAN:IMPLEMENT"
+  "PLAN:SCOPE_UPDATE"
   "IMPLEMENT:VALIDATE"
   "IMPLEMENT:SCOPE_RECONCILE"
   "IMPLEMENT:PLAN_UPDATE"
@@ -134,8 +187,8 @@ ALLOWED_TRANSITIONS=(
   "SCOPE_RECONCILE:IMPLEMENT"
   "SCOPE_RECONCILE:PLAN_UPDATE"
   "PLAN_UPDATE:IMPLEMENT"
-  "CONTRACT_UPDATE:PLAN"
-  "CONTRACT_UPDATE:IMPLEMENT"
+  "SCOPE_UPDATE:PLAN"
+  "SCOPE_UPDATE:IMPLEMENT"
   "VALIDATION_REPAIR:VALIDATE"
   "VALIDATION_REPAIR:IMPLEMENT"
   "ARTIFACT_REPAIR:SELF_REVIEW"
@@ -158,7 +211,6 @@ ALLOWED_TRANSITIONS=(
   "PACKAGE:REVIEW_REFRESH"
   "PACKAGE:ARTIFACT_REPAIR"
   "APPROVAL:POSTMORTEM"
-  "APPROVAL:POSTMORTEM"
   "POSTMORTEM:MEMORY_INDEX"
   "MEMORY_INDEX:COMPLETE"
   "APPROVAL:PACKAGE"            # corrective: approval fingerprint stale
@@ -178,8 +230,6 @@ ALLOWED_TRANSITIONS=(
   "STYLE_REPAIR:APPROVAL"
   "STYLE_REPAIR:IMPLEMENT"
   "STYLE_REPAIR:VALIDATE"
-  "COMPLETE:BLOCKED"
-  "COMPLETE:BLOCKED"
   "COMPLETE:BLOCKED"
 )
 
@@ -211,12 +261,11 @@ calls = set(evidence.get("gitnexus_calls") or intel.get("gitnexus_calls") or [])
 fallback = evidence.get("fallback_commands") or intel.get("fallback_commands") or []
 missing = []
 
-if intel.get("gitnexus_probe_attempted") is not True and "list_repos" not in calls:
-    missing.append("record gitnexus_probe_attempted=true or gitnexus_calls includes list_repos")
-
 if "gitnexus_available" not in intel:
     missing.append("record gitnexus_available=true/false")
 elif intel.get("gitnexus_available") is True:
+    if intel.get("gitnexus_probe_attempted") is not True and "list_repos" not in calls:
+        missing.append("record gitnexus_probe_attempted=true or gitnexus_calls includes list_repos")
     required = {"list_repos", "query", "impact", "context", "detect_changes"}
     missing_calls = sorted(required - calls)
     if missing_calls:
@@ -434,39 +483,10 @@ fi
 # --- VALIDATE → SELF_REVIEW: validation must be complete and ledger written ---
 if [ "$TRANSITION" = "VALIDATE:SELF_REVIEW" ]; then
   HARNESS_DIR="$(dirname "$FILE_PATH")"
-  VALIDATE_CHECK=$(PRFORGE_STATE_CONTENT="$CONTENT" python3 - "$HARNESS_DIR" <<'PY'
-import json, os, sys
-from pathlib import Path
-
-artifact_dir = Path(sys.argv[1])
-try:
-    d = json.loads(os.environ.get("PRFORGE_STATE_CONTENT", ""))
-    validation = d.get("validation", {})
-    run = validation.get("commands_run", [])
-    not_run = validation.get("commands_not_run", [])
-    missing = []
-
-    if not run:
-        missing.append("validation.commands_run is empty — run every command listed in contract.md before self-review")
-    else:
-        failed = [c.get("command", "?") for c in run if c.get("status") != "passed"]
-        if failed:
-            missing.append("failing validations not resolved: " + ", ".join(failed[:3]))
-
-    if not_run:
-        missing.append("commands not yet run: " + ", ".join(c.get("command","?") for c in not_run[:3]))
-
-    ledger = artifact_dir / "validation_ledger.md"
-    if not ledger.exists():
-        missing.append("validation_ledger.md not written — record all results (pass/fail/output) in the ledger")
-    elif len(ledger.read_text(errors="replace").strip()) < 50:
-        missing.append("validation_ledger.md is empty — fill in actual command results")
-
-    print("FAIL:" + " | ".join(missing) if missing else "OK")
-except Exception as e:
-    print(f"FAIL:could not read state: {e}")
-PY
-)
+  VALIDATE_CHECK=$(TMP_STATE=$(mktemp "${TMPDIR:-/tmp}/prforge-state.XXXXXX.json") && \
+    printf "%s" "$CONTENT" > "$TMP_STATE" && \
+    python3 "$SCRIPT_DIR/../scripts/validation_evidence.py" "$HARNESS_DIR" --state-file "$TMP_STATE" 2>/dev/null; \
+    rc=$?; rm -f "$TMP_STATE"; exit $rc)
   if ! echo "$VALIDATE_CHECK" | grep -qx "OK"; then
     REPO_ROOT=$(PRFORGE_STATE_CONTENT="$CONTENT" python3 - <<'PY'
 import json, os

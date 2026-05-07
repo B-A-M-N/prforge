@@ -36,3 +36,6 @@ Thumbs.db
 # Temp/tooling
 =*
 conductor/
+
+# PRForge certification output (written by scripts/certify.sh)
+.prforge-certification/

@@ -125,6 +125,23 @@ def init_db():
 
             CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_fingerprint_scope
                 ON memory_records(scope_repo, lesson_type, lesson_fingerprint);
+
+            CREATE TRIGGER IF NOT EXISTS memory_records_ai AFTER INSERT ON memory_records BEGIN
+                INSERT INTO memory_fts(rowid, lesson, scope_repo, scope_subsystem)
+                VALUES (new.rowid, new.lesson, new.scope_repo, new.scope_subsystem);
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS memory_records_ad AFTER DELETE ON memory_records BEGIN
+                INSERT INTO memory_fts(memory_fts, rowid, lesson, scope_repo, scope_subsystem)
+                VALUES ('delete', old.rowid, old.lesson, old.scope_repo, old.scope_subsystem);
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS memory_records_au AFTER UPDATE ON memory_records BEGIN
+                INSERT INTO memory_fts(memory_fts, rowid, lesson, scope_repo, scope_subsystem)
+                VALUES ('delete', old.rowid, old.lesson, old.scope_repo, old.scope_subsystem);
+                INSERT INTO memory_fts(rowid, lesson, scope_repo, scope_subsystem)
+                VALUES (new.rowid, new.lesson, new.scope_repo, new.scope_subsystem);
+            END;
         """)
     print(f"Database initialized at {DB_PATH}")
 
@@ -175,10 +192,11 @@ def cmd_append_event(args):
     run_id = args.run_id
     phase = args.phase
     event_type = args.type
-    artifact_id = args.artifact_id or ""
+    artifact_id = args.artifact_id or None
     payload = args.payload or "{}"
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    event_id = sha256_text(f"{run_id}:{phase}:{event_type}:{now}")
+    payload_hash = sha256_text(payload)
+    event_id = sha256_text(f"{run_id}:{phase}:{event_type}:{now}:{payload_hash}")
 
     conn = get_connection()
     with conn:
@@ -227,6 +245,58 @@ def cmd_search(args):
 
     for row in rows:
         print(json.dumps(dict(row)))
+
+def cmd_add_memory_record(args):
+    """Add or update one memory lesson. Primarily used by tests and import tools."""
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    lesson_fingerprint = sha256_text(args.lesson.lower().strip())
+    record_id = args.id or hashlib.sha256(
+        f"{args.postmortem_id}:{args.lesson_type}:{lesson_fingerprint}:{args.repo}".encode()
+    ).hexdigest()
+    evidence = json.loads(args.evidence_artifact_ids_json or "[]")
+    file_globs = json.loads(args.file_globs_json or "[]")
+
+    conn = get_connection()
+    with conn:
+        conn.execute("""
+            INSERT INTO memory_records (
+                id, postmortem_id, run_id, lesson, lesson_type,
+                lesson_fingerprint, scope_repo, scope_subsystem,
+                scope_file_globs_json, evidence_artifact_ids_json,
+                confidence, inferred, promotion_state, recurrence_count,
+                first_seen_at, last_seen_at, invalidated_at, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(scope_repo, lesson_type, lesson_fingerprint) DO UPDATE SET
+                lesson = excluded.lesson,
+                scope_subsystem = excluded.scope_subsystem,
+                scope_file_globs_json = excluded.scope_file_globs_json,
+                evidence_artifact_ids_json = excluded.evidence_artifact_ids_json,
+                confidence = excluded.confidence,
+                inferred = excluded.inferred,
+                promotion_state = excluded.promotion_state,
+                recurrence_count = excluded.recurrence_count,
+                last_seen_at = excluded.last_seen_at
+        """, (
+            record_id,
+            args.postmortem_id,
+            args.run_id,
+            args.lesson,
+            args.lesson_type,
+            lesson_fingerprint,
+            args.repo,
+            args.subsystem,
+            json.dumps(file_globs),
+            json.dumps(evidence),
+            args.confidence,
+            1 if args.inferred else 0,
+            args.promotion_state,
+            args.recurrence_count,
+            now,
+            now,
+            None,
+            now,
+        ))
+    print(f"Memory record upserted: {record_id}")
 
 def cmd_stats(args):
     conn = get_connection()
@@ -349,6 +419,22 @@ def main():
     # rebuild-fts
     subparsers.add_parser("rebuild-fts", help="Rebuild FTS index")
 
+    # add-memory-record
+    p = subparsers.add_parser("add-memory-record", help="Add or update one memory lesson")
+    p.add_argument("--id", default="")
+    p.add_argument("--postmortem-id", required=True)
+    p.add_argument("--run-id", required=True)
+    p.add_argument("--lesson", required=True)
+    p.add_argument("--lesson-type", required=True)
+    p.add_argument("--repo", required=True)
+    p.add_argument("--subsystem", default="")
+    p.add_argument("--file-globs-json", default="[]")
+    p.add_argument("--evidence-artifact-ids-json", default="[]")
+    p.add_argument("--confidence", default="high")
+    p.add_argument("--promotion-state", default="active")
+    p.add_argument("--recurrence-count", type=int, default=1)
+    p.add_argument("--inferred", action="store_true")
+
     # retention
     p = subparsers.add_parser("retention", help="Retention policy check")
     p.add_argument("--dry-run", action="store_true")
@@ -372,6 +458,8 @@ def main():
         cmd_verify_artifacts(args)
     elif args.command == "rebuild-fts":
         cmd_rebuild_fts(args)
+    elif args.command == "add-memory-record":
+        cmd_add_memory_record(args)
     elif args.command == "retention":
         cmd_retention(args)
     else:

@@ -24,7 +24,9 @@ from redis_backend import (
     get_job,
     heartbeat,
     release_job_leases,
+    release_path_locks,
     renew_job_leases,
+    renew_path_locks,
     upsert_job,
 )
 from notifications import notify
@@ -226,8 +228,14 @@ def _tick(
                    desktop=desktop, pubsub=pubsub)
             return
 
-        _write_inbox(job, repo_path, cluster, node_id, config or {"limits": {"lease_ttl_seconds": lease_ttl}})
-        _write_distributed_json(job, repo_path, cluster, node_id, config)
+        job_type = job.get("type", "")
+
+        # Handle same_file_review_assist jobs
+        if job_type == "same_file_review_assist":
+            _write_advisory_inbox(job, repo_path, cluster, node_id, config)
+        else:
+            _write_inbox(job, repo_path, cluster, node_id, config or {"limits": {"lease_ttl_seconds": lease_ttl}})
+            _write_distributed_json(job, repo_path, cluster, node_id, config)
 
         upsert_job(r, cluster, {**job, "status": "active"})
         node_state["status"]     = "active"
@@ -243,11 +251,11 @@ def _tick(
         notify(r, cluster, "JobDispatched",
                f"Job {active_job_id} ready at {artifact_dir}/inbox/job.json",
                desktop=desktop, pubsub=pubsub)
-        logger.info("Wrote inbox for job=%s repo=%s", active_job_id, repo_path)
+        logger.info("Wrote inbox for job=%s repo=%s type=%s", active_job_id, repo_path, job_type)
 
     # 4. Active job — renew leases, read outbox status
     elif status == "active":
-        renew_job_leases(
+        failed_leases = renew_job_leases(
             r, cluster,
             active_job_id,
             job["repo"],
@@ -256,6 +264,27 @@ def _tick(
             node_id,
             lease_ttl,
         )
+        path_keys = _parse_json_list(job.get("path_keys", "[]"))
+        if path_keys:
+            failed_leases.extend(renew_path_locks(r, path_keys, node_id, active_job_id, lease_ttl))
+        if failed_leases:
+            logger.error("Lease renewal failed job=%s failed=%s", active_job_id, failed_leases)
+            upsert_job(r, cluster, {
+                **job,
+                "status": "blocked",
+                "blocker": "lease_renewal_failed",
+                "failed_leases": json.dumps(failed_leases),
+            })
+            node_state["status"] = "blocked"
+            emit_event(r, cluster, "LeaseRenewalFailed", {
+                "job_id": active_job_id,
+                "node": node_id,
+                "failed_leases": json.dumps(failed_leases),
+            })
+            notify(r, cluster, "LeaseRenewalFailed",
+                   f"Job {active_job_id} blocked because leases expired or changed owner",
+                   desktop=desktop, pubsub=pubsub)
+            return
         repo_path = _resolve_repo(job["repo"], repo_roots)
         if repo_path:
             _read_outbox_status(r, cluster, active_job_id, job, repo_path,
@@ -328,6 +357,38 @@ def _write_inbox(job: dict, repo_path: str, cluster: str, node_id: str, config: 
 
     inbox_path = inbox_dir / "job.json"
     inbox_path.write_text(json.dumps(packet, indent=2))
+    _write_locks_json(job, artifact_dir)
+
+
+def _parse_json_list(value) -> list:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str) and value:
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, list) else []
+        except json.JSONDecodeError:
+            return []
+    return []
+
+
+def _write_locks_json(job: dict, artifact_dir: Path) -> None:
+    """Write the local lock manifest consumed by mesh-lock-guard."""
+    path_keys = _parse_json_list(job.get("path_keys", "[]"))
+    write_set = _parse_json_list(job.get("write_set", "[]"))
+    paths = []
+    if write_set:
+        paths = [{"path": p, "lease_key": path_keys[i] if i < len(path_keys) else ""} for i, p in enumerate(write_set)]
+    elif path_keys:
+        paths = [{"path": k.split(":")[-1], "lease_key": k} for k in path_keys]
+    locks = {
+        "job_id": job.get("job_id", ""),
+        "leases": {
+            "paths": paths,
+        },
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    (artifact_dir / "locks.json").write_text(json.dumps(locks, indent=2) + "\n")
 
 
 def _write_submission_json(job: dict, repo_path: str, cluster: str, node_id: str) -> None:
@@ -419,6 +480,59 @@ def _write_distributed_json(
     (pf_dir / "distributed.json").write_text(json.dumps(data, indent=2))
 
 
+def _write_advisory_inbox(
+    job: dict,
+    repo_path: str,
+    cluster: str,
+    node_id: str,
+    config: dict | None,
+) -> None:
+    """Write inbox for a same_file_review_assist job.
+
+    The advisory worker reads the owner's artifacts and produces
+    review/risk/test-suggestion notes. No source file mutations.
+    """
+    artifact_dir = _artifact_dir(job, repo_path)
+    _ensure_pointer(job, repo_path, artifact_dir)
+    inbox_dir = artifact_dir / "inbox"
+    inbox_dir.mkdir(parents=True, exist_ok=True)
+
+    import json as _json
+    packet = {
+        "mesh": {
+            "enabled": True,
+            "cluster_name": cluster,
+            "node_id": node_id,
+            "role": "worker",
+        },
+        "job": {
+            "job_id": job["job_id"],
+            "type": "same_file_review_assist",
+            "priority": job.get("priority", "P4"),
+            "repo": job.get("repo", ""),
+            "pr_number": int(job.get("pr_number", 0)),
+            "base_branch": job.get("base_branch", "main"),
+            "head_branch": job.get("head_branch", ""),
+            "source_url": job.get("source_url", ""),
+            "objective": job.get("objective", ""),
+            "blocked_job_id": job.get("blocked_job_id", ""),
+            "owner_job_id": job.get("owner_job_id", ""),
+            "owner_worker_id": job.get("owner_worker_id", ""),
+            "locked_paths": _json.loads(job.get("locked_paths", "[]")),
+            "owner_artifact_dir": job.get("owner_artifact_dir", ""),
+            "mode": "read_only",
+        },
+        "constraints": {
+            "read_only": True,
+            "may_not_edit_locked_paths": True,
+            "advisory_artifacts_only": True,
+        },
+    }
+
+    (inbox_dir / "job.json").write_text(_json.dumps(packet, indent=2))
+    logger.info("Wrote advisory inbox for job=%s", job["job_id"])
+
+
 def _read_outbox_status(
     r: redis.Redis,
     cluster: str,
@@ -499,6 +613,9 @@ def _finalize(
         job.get("head_branch", ""),
         node_id,
     )
+    path_keys = _parse_json_list(job.get("path_keys", "[]"))
+    if path_keys:
+        release_path_locks(r, path_keys, node_id, job["job_id"])
     _clear_job(r, cluster, node_id, node_state)
     if job.get("status") == "approval_ready":
         notify(r, cluster, "ApprovalReady",

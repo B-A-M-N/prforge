@@ -15,6 +15,7 @@ Manager Mode:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import sys
@@ -30,12 +31,17 @@ import redis
 
 from redis_backend import (
     acquire_job_leases,
+    acquire_path_locks_atomic,
     emit_event,
+    enqueue_job,
     get_job,
+    lease_path,
     list_nodes,
+    normalize_path_for_lease,
     normalize_roles,
     read_pending_jobs,
     release_job_leases,
+    release_path_locks,
     remove_from_pending,
     upsert_job,
 )
@@ -65,7 +71,19 @@ MAX_JOBS_PER_WORKER = 1
 PRIORITY_ORDER = {"P0": 0, "P1": 1, "P2": 2, "P3": 3, "P4": 4}
 
 # Job types that workers may execute. audit_only is auditor-side only.
-WORKER_JOB_TYPES = {"review_response", "pr_polish", "ci_fix_related_to_branch", "new_pr"}
+WORKER_JOB_TYPES = {
+    "review_response", "pr_polish", "ci_fix_related_to_branch", "new_pr",
+    "same_file_review_assist", "integration",
+}
+
+# Sub-types that are coordinator-certified (require path lock acquisition)
+MUTATING_JOB_TYPES = {"review_response", "pr_polish", "ci_fix_related_to_branch", "new_pr"}
+
+# Advisory/read-only job types — never need path locks
+READONLY_JOB_TYPES = {"same_file_review_assist"}
+
+# Artifact directory convention
+ARTIFACT_BASE = Path.home() / ".prforge-mesh" / "artifacts"
 
 
 def run(r: redis.Redis, cluster: str, config: dict) -> None:
@@ -136,6 +154,7 @@ def _tick(r: redis.Redis, cluster: str, lease_ttl: int, config: dict | None = No
     assigned_prs:      set[str] = set()
     assigned_branches: set[str] = set()
     assigned_workers:  set[str] = set()
+    assigned_paths:    set[str] = set()
 
     for job in pending:
         if active_worker_jobs >= GLOBAL_MAX_ACTIVE_WORKER_JOBS:
@@ -188,13 +207,61 @@ def _tick(r: redis.Redis, cluster: str, lease_ttl: int, config: dict | None = No
 
         wid = target_worker["node_id"]
 
-        # 8. Acquire all leases atomically
+        # 8. Acquire job/target/branch leases atomically
         ok, _ = acquire_job_leases(r, cluster, job, wid, lease_ttl)
         if not ok:
             logger.debug("Lease acquisition failed job=%s worker=%s", job.get("job_id"), wid)
             continue
 
-        # 9. Assign job
+        # 9. For mutating jobs, acquire path locks atomically before dispatch
+        path_keys = []
+        if job_type in MUTATING_JOB_TYPES:
+            write_set = _resolve_write_set(job, repo)
+            if write_set:
+                # Check for same-file conflicts with already-assigned paths this tick
+                conflict = False
+                for p in write_set:
+                    norm = normalize_path_for_lease(p)
+                    if norm and norm in assigned_paths:
+                        logger.debug(
+                            "Path %s already assigned this tick — skipping job %s",
+                            norm, job.get("job_id"),
+                        )
+                        conflict = True
+                        break
+                if conflict:
+                    # Release job leases since we're not dispatching
+                    _release_job_leases_safe(r, cluster, job, wid)
+                    continue
+
+                # Atomically acquire path locks via Lua
+                repo_slug = repo.replace("/", "_")
+                path_ok, blocked = acquire_path_locks_atomic(
+                    r, cluster, repo_slug, wid, job["job_id"], write_set, lease_ttl,
+                )
+                if not path_ok:
+                    logger.info(
+                        "Path lock acquisition failed for job=%s worker=%s — "
+                        "creating advisory job. Blocked: %s",
+                        job.get("job_id"), wid, blocked,
+                    )
+                    # Release job leases since we're not dispatching this job
+                    _release_job_leases_safe(r, cluster, job, wid)
+                    # Create advisory job for the blocked worker
+                    _create_advisory_job(
+                        r, cluster, job, wid, blocked, config,
+                    )
+                    continue
+
+                path_keys = [lease_path(cluster, repo_slug, normalize_path_for_lease(p))
+                             for p in write_set if normalize_path_for_lease(p)]
+                # Track assigned paths
+                for p in write_set:
+                    norm = normalize_path_for_lease(p)
+                    if norm:
+                        assigned_paths.add(norm)
+
+        # 10. Assign job
         job_id = job["job_id"]
         now    = datetime.now(timezone.utc).isoformat()
         upsert_job(r, cluster, {
@@ -203,13 +270,14 @@ def _tick(r: redis.Redis, cluster: str, lease_ttl: int, config: dict | None = No
             "assigned_node": wid,
             "lease_id":      f"lease_{job_id}",
             "assigned_at":   now,
+            "path_keys":     json.dumps(path_keys),
         })
 
         # Remove from pending stream
         if "_stream_id" in job:
             remove_from_pending(r, cluster, job["_stream_id"])
 
-        # 10. Update worker node state
+        # 11. Update worker node state
         r.hset(f"Workflow:{cluster}:node:{wid}", mapping={
             "status":     "active",
             "active_job": job_id,
@@ -233,6 +301,9 @@ def _tick(r: redis.Redis, cluster: str, lease_ttl: int, config: dict | None = No
         logger.info("Dispatched job_id=%s worker=%s repo=%s pr=%s priority=%s",
                     job_id, wid, repo, pr, job.get("priority"))
 
+    # Handle PLAN→IMPLEMENT transitions: check for plan_ready jobs and certify IMPLEMENT
+    _process_plan_ready_jobs(r, cluster, config)
+
     # Stale worker reaper: detect dead workers and requeue their jobs
     _reap_stale_workers(r, cluster, config)
 
@@ -241,6 +312,283 @@ def _tick(r: redis.Redis, cluster: str, lease_ttl: int, config: dict | None = No
         _process_submission_ready_jobs(r, cluster, config)
         _poll_auditor_verdict_files(r, cluster, config)
         _process_audit_results(r, cluster, config)
+
+
+def _resolve_write_set(job: dict, repo: str) -> list[str]:
+    """Extract the declared write set from job constraints.
+
+    Uses declared_write_set if present, falls back to allowed_paths.
+    Directories are included (coordinator will resolve to files at IMPLEMENT time).
+    """
+    constraints = job.get("constraints", {})
+    if isinstance(constraints, str):
+        try:
+            constraints = json.loads(constraints)
+        except (json.JSONDecodeError, TypeError):
+            constraints = {}
+
+    write_set = constraints.get("declared_write_set")
+    if write_set:
+        return list(write_set)
+
+    # Fallback to allowed_paths (logged as warning)
+    allowed = constraints.get("allowed_paths", [])
+    if allowed:
+        logger.warning(
+            "Job %s missing declared_write_set — falling back to allowed_paths",
+            job.get("job_id"),
+        )
+        return list(allowed)
+
+    return []
+
+
+def _release_job_leases_safe(
+    r: redis.Redis,
+    cluster: str,
+    job: dict,
+    worker_id: str,
+) -> None:
+    """Release job/target/branch leases. Best-effort, logs errors."""
+    try:
+        release_job_leases(
+            r, cluster,
+            job["job_id"],
+            job.get("repo", ""),
+            str(job.get("pr_number", "")),
+            job.get("head_branch", ""),
+            worker_id,
+        )
+    except Exception:
+        logger.exception("Failed to release job leases for job %s", job.get("job_id"))
+
+
+def _create_advisory_job(
+    r: redis.Redis,
+    cluster: str,
+    blocked_job: dict,
+    blocked_worker_id: str,
+    blocked_details: list[dict],
+    config: dict | None,
+) -> None:
+    """Create a same_file_review_assist job when path lock acquisition fails.
+
+    De-duplicates: one advisory job per (blocked_job_id, owner_job_id, lock-set-hash).
+    """
+    import hashlib
+
+    blocked_job_id = blocked_job.get("job_id", "")
+    locked_paths = [d["path"] for d in blocked_details]
+    owner_job_id = blocked_details[0].get("owner_job_id", "") if blocked_details else ""
+    owner_worker_id = blocked_details[0].get("owner_worker_id", "") if blocked_details else ""
+
+    # De-dup key
+    lock_hash = hashlib.sha1(
+        ":".join(sorted(locked_paths)).encode()
+    ).hexdigest()[:12]
+    dedupe_key = (
+        f"Workflow:{cluster}:advisory:"
+        f"{blocked_job_id}:{owner_job_id}:{lock_hash}"
+    )
+    if r.exists(dedupe_key):
+        logger.debug("Advisory job already exists for %s — skipping", dedupe_key)
+        return
+
+    advisory_job_id = f"advisory-{blocked_job_id[:8]}-{lock_hash}"
+    now = datetime.now(timezone.utc).isoformat()
+
+    # Owner artifact directory
+    owner_artifact_dir = str(ARTIFACT_BASE / cluster / owner_job_id)
+
+    advisory_job = {
+        "job_id": advisory_job_id,
+        "type": "same_file_review_assist",
+        "priority": blocked_job.get("priority", "P4"),
+        "status": "queued",
+        "repo": blocked_job.get("repo", ""),
+        "pr_number": str(blocked_job.get("pr_number", "")),
+        "head_branch": blocked_job.get("head_branch", ""),
+        "base_branch": blocked_job.get("base_branch", "main"),
+        "source_url": blocked_job.get("source_url", ""),
+        "objective": (
+            f"Review and produce advisory notes for {blocked_job.get('repo', '')} "
+            f"PR #{blocked_job.get('pr_number', '')}. "
+            f"Locked paths: {', '.join(locked_paths)}"
+        ),
+        "blocked_job_id": blocked_job_id,
+        "owner_job_id": owner_job_id,
+        "owner_worker_id": owner_worker_id,
+        "locked_paths": json.dumps(locked_paths),
+        "owner_artifact_dir": owner_artifact_dir,
+        "mode": "read_only",
+        "created_at": now,
+    }
+
+    # Enqueue the advisory job
+    enqueue_job(r, cluster, advisory_job)
+
+    # Mark de-dup key
+    r.setex(dedupe_key, 3600, "exists")
+
+    logger.info(
+        "Created advisory job %s for blocked job %s (owner: %s, paths: %s)",
+        advisory_job_id, blocked_job_id, owner_worker_id, locked_paths,
+    )
+    emit_event(r, cluster, "AdvisoryJobCreated", {
+        "advisory_job_id": advisory_job_id,
+        "blocked_job_id": blocked_job_id,
+        "owner_job_id": owner_job_id,
+        "locked_paths": json.dumps(locked_paths),
+    })
+
+
+def _process_plan_ready_jobs(
+    r: redis.Redis,
+    cluster: str,
+    config: dict | None,
+) -> None:
+    """Check for jobs that have completed PLAN and need IMPLEMENT certification.
+
+    When a worker writes plan_ready to outbox/status.json, the coordinator reads
+    the declared_write_set, acquires path locks atomically, and creates an
+    IMPLEMENT job. If path locks fail, creates an advisory job instead.
+    """
+    if config is None:
+        return
+
+    worker_cfg = config.get("worker", {})
+    repo_roots = worker_cfg.get("repo_roots", [])
+
+    cursor = 0
+    while True:
+        cursor, keys = r.scan(cursor, match=f"Workflow:{cluster}:job:*", count=100)
+        for jk in keys:
+            job_data = r.hgetall(jk)
+            if not job_data:
+                continue
+
+            # Look for jobs that are active and have plan_ready status
+            if job_data.get("status") != "active":
+                continue
+
+            job_id = job_data.get("job_id", "")
+            assigned_node = job_data.get("assigned_node", "")
+            repo = job_data.get("repo", "")
+
+            if not job_id or not assigned_node:
+                continue
+
+            # Check if worker has written plan_ready
+            repo_path = _resolve_repo_path(repo, repo_roots)
+            if not repo_path:
+                continue
+
+            artifact_dir = _read_pointer_artifact_dir(repo_path)
+            status_path = artifact_dir / "outbox" / "status.json"
+            if not status_path.exists():
+                continue
+
+            try:
+                status = json.loads(status_path.read_text())
+            except (json.JSONDecodeError, OSError):
+                continue
+
+            if status.get("status") != "plan_ready":
+                continue
+
+            # Check if IMPLEMENT job already created for this plan
+            implement_marker = f"Workflow:{cluster}:implement_certified:{job_id}"
+            if r.exists(implement_marker):
+                continue
+
+            # Read declared_write_set from scope.json
+            scope_path = artifact_dir / "scope.json"
+            write_set = []
+            if scope_path.exists():
+                try:
+                    scope = json.loads(scope_path.read_text())
+                    write_set = scope.get("declared_write_set", [])
+                except (json.JSONDecodeError, OSError):
+                    pass
+
+            if not write_set:
+                logger.warning(
+                    "Job %s plan_ready but no declared_write_set — skipping IMPLEMENT certification",
+                    job_id,
+                )
+                continue
+
+            # Resolve directories to concrete files
+            resolved_write_set = _resolve_write_set_paths(repo_path, write_set)
+            if not resolved_write_set:
+                logger.warning(
+                    "Job %s plan_ready but write_set resolved to empty — skipping",
+                    job_id,
+                )
+                continue
+
+            # Atomically acquire path locks
+            repo_slug = repo.replace("/", "_")
+            path_ok, blocked = acquire_path_locks_atomic(
+                r, cluster, repo_slug, assigned_node, job_id, resolved_write_set,
+                config.get("limits", {}).get("lease_ttl_seconds", 1800),
+            )
+
+            if not path_ok:
+                logger.info(
+                    "IMPLEMENT certification failed for job=%s — creating advisory. Blocked: %s",
+                    job_id, blocked,
+                )
+                _create_advisory_job(r, cluster, dict(job_data), assigned_node, blocked, config)
+                r.setex(implement_marker, 3600, "advisory_created")
+                continue
+
+            # Path locks acquired — create IMPLEMENT certification
+            path_keys = [lease_path(cluster, repo_slug, normalize_path_for_lease(p))
+                         for p in resolved_write_set if normalize_path_for_lease(p)]
+
+            # Store path keys on the job for the worker to use
+            upsert_job(r, cluster, {
+                **{k: v for k, v in job_data.items()},
+                "path_keys": json.dumps(path_keys),
+                "write_set": json.dumps(resolved_write_set),
+            })
+
+            r.setex(implement_marker, 3600, "certified")
+
+            logger.info(
+                "IMPLEMENT certified for job=%s worker=%s paths=%s",
+                job_id, assigned_node, resolved_write_set,
+            )
+            emit_event(r, cluster, "ImplementCertified", {
+                "job_id": job_id,
+                "worker": assigned_node,
+                "write_set": json.dumps(resolved_write_set),
+            })
+
+        if cursor == 0:
+            break
+
+
+def _resolve_write_set_paths(repo_path: str, write_set: list[str]) -> list[str]:
+    """Resolve write_set entries to concrete file paths.
+
+    Directories are expanded to files within them.
+    Non-existent paths are filtered out.
+    """
+    resolved = []
+    repo = Path(repo_path)
+    for entry in write_set:
+        p = repo / entry
+        if p.is_file():
+            resolved.append(entry)
+        elif p.is_dir():
+            # Expand directory to files
+            for f in sorted(p.rglob("*")):
+                if f.is_file():
+                    resolved.append(str(f.relative_to(repo)))
+        # Non-existent paths are silently skipped
+    return resolved
 
 
 def _reap_stale_workers(
@@ -877,6 +1225,8 @@ def _parse_allowed_modes(worker: dict) -> list:
 
 
 def _mode_allowed(job_type: str, allowed_modes: list) -> bool:
+    if job_type in READONLY_JOB_TYPES:
+        return True
     mapping = {
         "review_response":          "review_response",
         "pr_polish":                "pr_polish",
@@ -972,7 +1322,6 @@ def handle_submission_ready(
     nodes = list_nodes(r, cluster)
     workers = [n for n in nodes if _node_is_worker(n)]
     active_count = sum(1 for n in workers if n.get("status") == "active")
-    from coordinator import GLOBAL_MAX_ACTIVE_WORKER_JOBS
     within_limits = active_count <= GLOBAL_MAX_ACTIVE_WORKER_JOBS
     checks["global_limits"] = {"pass": within_limits, "reason": "" if within_limits else f"active={active_count} >= cap={GLOBAL_MAX_ACTIVE_WORKER_JOBS}"}
     if not within_limits:

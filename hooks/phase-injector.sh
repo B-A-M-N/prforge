@@ -7,9 +7,7 @@
 # Don't let errors kill this hook — it's advisory
 set +e
 
-# Diagnostic: log hook invocation (minimal, for validation only)
-mkdir -p "$(git rev-parse --show-toplevel 2>/dev/null)/.prforge" 2>/dev/null
-echo "$(date -Iseconds) [phase-injector] Write/Edit hook fired" >> "$(git rev-parse --show-toplevel 2>/dev/null)/.prforge/hook_events.log" 2>/dev/null || true
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
 
 HOOK_JSON=$(cat)
 
@@ -60,9 +58,8 @@ case "$NEW_PHASE" in
   SELF_REVIEW)         PLAYBOOK="self_review.md" ;;
   PACKAGE)             PLAYBOOK="package.md" ;;
   APPROVAL)            PLAYBOOK="approval.md" ;;
-  SHIPPED|SHIPPED_PENDING) PLAYBOOK="shipped.md" ;;
   BLOCKED)             PLAYBOOK="blocked.md" ;;
-  SCOPE_RECONCILE|STATE_SYNC_REPAIR|LEASE_RENEWAL_REPAIR|REVIEW_REFRESH|CONTRACT_UPDATE|PLAN_UPDATE|VALIDATION_REPAIR|INTELLIGENCE_REPAIR|ARTIFACT_REPAIR|COORDINATOR_RECONCILE)
+  SCOPE_RECONCILE|STATE_SYNC_REPAIR|LEASE_RENEWAL_REPAIR|REVIEW_REFRESH|SCOPE_UPDATE|PLAN_UPDATE|VALIDATION_REPAIR|INTELLIGENCE_REPAIR|ARTIFACT_REPAIR|COORDINATOR_RECONCILE|STYLE_REPAIR|COMMIT_REPAIR|POLL_CI)
     PLAYBOOK="blocked.md"
     ;;
   *)
@@ -78,9 +75,17 @@ if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ] && [ -f "${CLAUDE_PLUGIN_ROOT}/skills/prforg
   SKILL_ROOT="${CLAUDE_PLUGIN_ROOT}/skills/prforge"
 fi
 
-# 2. Try to find via filesystem search
+# 2. Try repository/plugin layout relative to this hook.
+if [ -z "$SKILL_ROOT" ] && [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/../skills/prforge/phases/${PLAYBOOK}" ]; then
+  SKILL_ROOT="$(cd "$SCRIPT_DIR/../skills/prforge" 2>/dev/null && pwd)"
+fi
+
+# 3. Optional bounded filesystem search for nonstandard local installs.
 if [ -z "$SKILL_ROOT" ]; then
-  FOUND=$(find "$HOME" -path "*/skills/prforge/phases/${PLAYBOOK}" -type f 2>/dev/null | head -1)
+  FOUND=""
+  if [ "${PRFORGE_PHASE_INJECTOR_ALLOW_HOME_SCAN:-0}" = "1" ]; then
+    FOUND=$(find "$HOME" -maxdepth 6 -path "*/skills/prforge/phases/${PLAYBOOK}" -type f 2>/dev/null | head -1)
+  fi
   if [ -n "$FOUND" ]; then
     SKILL_ROOT=$(dirname "$FOUND")
     SKILL_ROOT=$(dirname "$SKILL_ROOT")  # go up from phases/ to skills/prforge/
@@ -107,8 +112,8 @@ if [ -n "$SKILL_ROOT" ] && [ -f "$SKILL_ROOT/phases/$PLAYBOOK" ]; then
 else
   echo "MANDATORY: Find and read the phase playbook for $NEW_PHASE before proceeding."
   echo ""
-  echo "  Run this to locate it:"
-  echo "  find \"\$HOME\" -path \"*/skills/prforge/phases/$PLAYBOOK\" -type f | head -1"
+  echo "  Expected relative path: skills/prforge/phases/$PLAYBOOK"
+  echo "  Set CLAUDE_PLUGIN_ROOT if this plugin is installed outside the repository."
   echo ""
   echo "Then read that file completely before taking any further action."
   echo "The playbook contains required steps and a PHASE EXIT GATE checklist."
@@ -146,18 +151,15 @@ case "$NEW_PHASE" in
     echo "  • User silence is NOT approval — wait for affirmative response"
     echo "  • 'Looks good', 'yes', 'go ahead', 'push it' all count"
     ;;
-  SHIPPED|SHIPPED_PENDING)
-    echo "  • Verify idempotency guard FIRST: consumed != true"
-    echo "  • Verify diff_hash and validation_hash still match"
-    echo "  • Execute ONLY actions in state.approval.approved_actions"
-    echo "  • Append to shipping_ledger.json after each public action"
-    echo "  • Set approval.consumed = true when done"
-    ;;
-  SCOPE_RECONCILE|STATE_SYNC_REPAIR|LEASE_RENEWAL_REPAIR|REVIEW_REFRESH|CONTRACT_UPDATE|PLAN_UPDATE|VALIDATION_REPAIR|INTELLIGENCE_REPAIR|ARTIFACT_REPAIR|COORDINATOR_RECONCILE)
+  SCOPE_RECONCILE|STATE_SYNC_REPAIR|LEASE_RENEWAL_REPAIR|REVIEW_REFRESH|SCOPE_UPDATE|PLAN_UPDATE|VALIDATION_REPAIR|INTELLIGENCE_REPAIR|ARTIFACT_REPAIR|COORDINATOR_RECONCILE|STYLE_REPAIR|COMMIT_REPAIR|POLL_CI)
     echo "  • This is a recoverable redirect, not task completion"
     echo "  • Read redirects/current.json and perform the required next action"
     echo "  • Keep the original objective pinned"
     echo "  • Return to the prior phase after repair"
+    if [ "$NEW_PHASE" = "SCOPE_UPDATE" ]; then
+      echo "  • Update contract.md and patch_plan.md to reflect the new scope"
+      echo "  • Re-hash dod.md after scope change"
+    fi
     if [ "$NEW_PHASE" = "INTELLIGENCE_REPAIR" ]; then
       echo "  • Probe GitNexus and record intelligence.evidence before PLAN"
       echo "  • If GitNexus is unavailable, document unavailable_reason and fallback_commands"
