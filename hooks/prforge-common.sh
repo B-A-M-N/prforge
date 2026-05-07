@@ -129,8 +129,14 @@ if budget > 0 and count >= budget:
         try:
             sd = json.loads(state_file.read_text())
             sd["phase"] = "BLOCKED"
-            sd["blocker"] = f"Redirect budget exceeded for {reason} (count={count})"
-            state_file.write_text(json.dumps(sd, indent=2))
+            sd["blocker"] = {
+                "reason": "redirect_budget_exceeded",
+                "details": f"Redirect budget exceeded for {reason} (count={count})",
+                "suggested_fix": "Resolve redirects/current.json manually, then return to the blocked phase.",
+            }
+            tmp = state_file.with_suffix(state_file.suffix + ".tmp")
+            tmp.write_text(json.dumps(sd, indent=2) + "\n")
+            tmp.replace(state_file)
         except Exception:
             pass
     sys.exit(1)

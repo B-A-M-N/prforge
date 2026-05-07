@@ -11,6 +11,8 @@
 set +e  # Never crash — blocking is done via exit 1 + stderr message
 
 HOOK_JSON=$(cat)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+APPROVAL_VERIFIER="$SCRIPT_DIR/../scripts/pr_approve.py"
 
 # Parse tool name
 TOOL_NAME=""
@@ -31,6 +33,16 @@ if command -v jq >/dev/null 2>&1; then
   CMD=$(echo "$HOOK_JSON" | jq -r '.tool_input.command // empty' 2>/dev/null || echo "")
 elif command -v python3 >/dev/null 2>&1; then
   CMD=$(echo "$HOOK_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('tool_input',{}).get('command',''))" 2>/dev/null || echo "")
+fi
+
+PUBLIC_ACTION_RE='(^|[[:space:];|&])git[[:space:]]+push([[:space:]]|$)|(^|[[:space:];|&])gh[[:space:]]+pr[[:space:]]+(create|edit|merge|close|comment|review|ready|reopen|request-reviewers)|(^|[[:space:];|&])gh[[:space:]]+issue[[:space:]]+(close|comment|edit)|(^|[[:space:];|&])gh[[:space:]]+api.*(comments|reviews|pulls|issues|merges)'
+IS_PUBLIC_ACTION=false
+echo "$CMD" | grep -qiE "$PUBLIC_ACTION_RE" && IS_PUBLIC_ACTION=true || true
+
+if echo "$CMD" | grep -qiE '(^|[[:space:];|&])git[[:space:]]+push([^|;&]*)(--force([=[:space:]]|$)|[[:space:]]-f([[:space:]]|$))'; then
+  echo "⛔ PRForge Gate: raw git push --force is never allowed." >&2
+  echo "   Use --force-with-lease and require approval.approved_actions contains force_push." >&2
+  exit 1
 fi
 
 # Find state.json
@@ -101,7 +113,7 @@ fi
 # The agent gets freedom within the envelope.
 
 case "$CURRENT_PHASE" in
-  INTAKE|CONTRACT|REPRODUCE|INVESTIGATE)
+  INTAKE|INVESTIGATE|PLAN)
     # Read-only phases: no git write, no push, no PR creation
     if echo "$CMD" | grep -qE "^git (push|merge|rebase|reset|checkout -b|branch -D|tag)"; then
       echo "⛔ PRForge Gate: '$CURRENT_PHASE' does not permit git write operations." >&2
@@ -165,18 +177,17 @@ case "$CURRENT_PHASE" in
   APPROVAL)
     # Approval phase: waiting for user decision
     # Only allow read operations and the specific approved actions
-    if echo "$CMD" | grep -qE "^git push"; then
-      # Check if push is in approved_actions
-      if ! echo "$ALLOWED_ACTIONS" | grep -q "push"; then
-        echo "⛔ PRForge Gate: 'APPROVAL' — git push not in approved_actions." >&2
-        echo "   Wait for user approval and use /pr-approve to execute." >&2
+    if [ "$IS_PUBLIC_ACTION" = "true" ]; then
+      if [ ! -f "$APPROVAL_VERIFIER" ]; then
+        echo "⛔ PRForge Gate: approval verifier missing at $APPROVAL_VERIFIER." >&2
         exit 1
       fi
-    fi
-    if echo "$CMD" | grep -qE "^gh pr create"; then
-      if ! echo "$ALLOWED_ACTIONS" | grep -q "create_pr"; then
-        echo "⛔ PRForge Gate: 'APPROVAL' — gh pr create not in approved_actions." >&2
-        echo "   Wait for user approval and use /pr-approve to execute." >&2
+      VERIFY_OUTPUT=$(python3 "$APPROVAL_VERIFIER" --repo "$REPO_ROOT" "$CMD" 2>&1)
+      VERIFY_RC=$?
+      if [ "$VERIFY_RC" -ne 0 ]; then
+        echo "⛔ PRForge Gate: public action failed approval verification." >&2
+        echo "   $VERIFY_OUTPUT" >&2
+        echo "   Regenerate approval or run /pr-approve after explicit user approval." >&2
         exit 1
       fi
     fi
@@ -221,6 +232,6 @@ if [ -n "$BLOCKED_ACTIONS" ]; then
       exit 1
     fi
   done
-done
+fi
 
 exit 0

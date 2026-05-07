@@ -42,11 +42,38 @@ case "$PHASE" in
   *) exit 0 ;;
 esac
 
-# ── Cache check: removed (was causing stale intelligence) ──────────
 INTELLIGENCE_FILE="$HARNESS_DIR/repo_intelligence.md"
-if [ -f "$INTELLIGENCE_FILE" ]; then
-  # No longer skipping if updated within 90s, always re-evaluate.
-  :
+CURRENT_MODE=$(python3 -c "
+import json
+try:
+    d = json.load(open('$STATE_FILE'))
+    print(d.get('intelligence', {}).get('mode', ''))
+except:
+    print('')
+" 2>/dev/null || echo "")
+
+# Advisory intelligence discovery does not need to re-run on every Read/Grep/Glob.
+# Phase-boundary still enforces required evidence before INVESTIGATE -> PLAN.
+CACHE_SECONDS="${PRFORGE_INTEL_CACHE_SECONDS:-300}"
+if [ -n "$CURRENT_MODE" ] && [ -f "$INTELLIGENCE_FILE" ] && command -v python3 >/dev/null 2>&1; then
+  CACHE_FRESH=$(python3 - "$INTELLIGENCE_FILE" "$CACHE_SECONDS" <<'PY'
+import os
+import sys
+import time
+
+path = sys.argv[1]
+try:
+    ttl = int(sys.argv[2])
+except Exception:
+    ttl = 300
+
+try:
+    print("yes" if ttl > 0 and time.time() - os.path.getmtime(path) < ttl else "no")
+except Exception:
+    print("no")
+PY
+)
+  [ "$CACHE_FRESH" = "yes" ] && exit 0
 fi
 
 # ── Auto-discover MCP servers ──────────────────────────────
@@ -78,15 +105,6 @@ GITNEXUS_CLI=false
 command -v gitnexus &>/dev/null && GITNEXUS_CLI=true
 
 # ── Update state with intelligence mode ────────────────────
-CURRENT_MODE=$(python3 -c "
-import json
-try:
-    d = json.load(open('$STATE_FILE'))
-    print(d.get('intelligence', {}).get('mode', ''))
-except:
-    print('')
-" 2>/dev/null || echo "")
-
 if [ -z "$CURRENT_MODE" ]; then
   GH_AVAILABLE=false
   gh auth status &>/dev/null 2>&1 && GH_AVAILABLE=true
@@ -115,6 +133,7 @@ if [ -z "$CURRENT_MODE" ]; then
     DISCLOSURE="GitNexus unavailable. ${MCP_NOTES}Fallback: rg, git log, gh PR search. Risk impact: Medium."
   fi
 
+  prforge_lock_state "$STATE_FILE" || exit 0
   python3 -c "
 import json
 f = '$STATE_FILE'
@@ -134,6 +153,7 @@ if not $GITNEXUS_AVAIL:
     d['intelligence']['unavailable_capabilities'] = caps
 open(f, 'w').write(json.dumps(d, indent=2))
 " 2>/dev/null || true
+  prforge_unlock_state "$STATE_FILE"
 fi
 
 # ── Write MCP tool instructions to repo_intelligence.md ────

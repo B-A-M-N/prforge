@@ -9,19 +9,21 @@ Usage:
 """
 
 import argparse
+import os
 import json
 import sqlite3
 import sys
-from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 
 def get_db_path() -> Path:
     """Determine the memory ledger database path."""
+    if os.environ.get("PRFORGE_MEMORY_DB"):
+        return Path(os.environ["PRFORGE_MEMORY_DB"]).expanduser()
     prforge_home = Path.home() / ".prforge"
     prforge_home.mkdir(exist_ok=True)
-    db_path = prforge_home / "memory_ledger.db"
+    db_path = prforge_home / "prforge_memory.db"
     return db_path
 
 
@@ -61,22 +63,32 @@ def query_memory_records(
         else:
             subsystems.add("root")
 
-    # ---- Rank 1: exact repo + matching files ----
-    # Look for records scoped to this exact repo whose file_globs match any of the
-    # changed files. file_globs is stored as JSON array string.
-    query1 = """
-        SELECT record_id, lesson_fingerprint, lesson_type, lesson_text,
-               repo_scope, subsystem, file_globs, maintainer, confidence,
-               recurrence_count, evidence_refs_json, inferred, promotion_state,
-               first_seen_at, last_seen_at,
-               1 as rank
+    base_select = """
+        SELECT id AS record_id,
+               lesson_fingerprint,
+               lesson_type,
+               lesson AS lesson_text,
+               scope_repo AS repo_scope,
+               scope_subsystem AS subsystem,
+               scope_file_globs_json AS file_globs,
+               confidence,
+               recurrence_count,
+               evidence_artifact_ids_json AS evidence_refs_json,
+               inferred,
+               promotion_state,
+               first_seen_at,
+               last_seen_at,
+               {rank} AS rank
         FROM memory_records
-        WHERE promotion_state = 'active'
-          AND repo_scope = ?
     """
-    params = [repo]
 
-    cur.execute(query1, params)
+    # ---- Rank 1: exact repo + matching files ----
+    query1 = base_select.format(rank=1) + """
+        WHERE promotion_state = 'active'
+          AND scope_repo = ?
+    """
+
+    cur.execute(query1, [repo])
     for row in cur.fetchall():
         file_globs = json.loads(row["file_globs"] or "[]")
         if _matches_file_patterns(file_paths, file_globs) or not file_globs:
@@ -84,16 +96,10 @@ def query_memory_records(
 
     if len(results) < limit:
         # ---- Rank 2: exact repo + matching subsystem ----
-        query2 = """
-            SELECT record_id, lesson_fingerprint, lesson_type, lesson_text,
-                   repo_scope, subsystem, file_globs, maintainer, confidence,
-                   recurrence_count, evidence_refs_json, inferred, promotion_state,
-                   first_seen_at, last_seen_at,
-                   2 as rank
-            FROM memory_records
+        query2 = base_select.format(rank=2) + """
             WHERE promotion_state = 'active'
-              AND repo_scope = ?
-              AND subsystem IS NOT NULL
+              AND scope_repo = ?
+              AND scope_subsystem IS NOT NULL
         """
         cur.execute(query2, [repo])
         for row in cur.fetchall():
@@ -106,16 +112,10 @@ def query_memory_records(
 
     if len(results) < limit:
         # ---- Rank 3: same org + subsystem match ----
-        query3 = """
-            SELECT record_id, lesson_fingerprint, lesson_type, lesson_text,
-                   repo_scope, subsystem, file_globs, maintainer, confidence,
-                   recurrence_count, evidence_refs_json, inferred, promotion_state,
-                   first_seen_at, last_seen_at,
-                   3 as rank
-            FROM memory_records
+        query3 = base_select.format(rank=3) + """
             WHERE promotion_state = 'active'
-              AND repo_scope LIKE ?
-              AND subsystem IS NOT NULL
+              AND scope_repo LIKE ?
+              AND scope_subsystem IS NOT NULL
         """
         cur.execute(query3, [f"{org}/%"])
         for row in cur.fetchall():
@@ -127,15 +127,9 @@ def query_memory_records(
 
     if len(results) < limit:
         # ---- Rank 4: global active with recurrence_count >= 2 ----
-        query4 = """
-            SELECT record_id, lesson_fingerprint, lesson_type, lesson_text,
-                   repo_scope, subsystem, file_globs, maintainer, confidence,
-                   recurrence_count, evidence_refs_json, inferred, promotion_state,
-                   first_seen_at, last_seen_at,
-                   4 as rank
-            FROM memory_records
+        query4 = base_select.format(rank=4) + """
             WHERE promotion_state = 'active'
-              AND (repo_scope IS NULL OR repo_scope = '')
+              AND (scope_repo IS NULL OR scope_repo = '')
               AND recurrence_count >= 2
             ORDER BY recurrence_count DESC, last_seen_at DESC
             LIMIT ?
@@ -171,6 +165,11 @@ def _get_evidence_summary(record: Dict[str, Any]) -> List[str]:
     evidence_refs = json.loads(record.get("evidence_refs_json", "[]"))
     summaries = []
     for ref in evidence_refs:
+        if isinstance(ref, str):
+            summaries.append(f"artifact {ref}")
+            continue
+        if not isinstance(ref, dict):
+            continue
         ref_type = ref.get("type", "")
         ref_id = ref.get("ref_id", "")
         if ref_type == "postmortem":
@@ -198,7 +197,6 @@ def format_output(records: List[Dict[str, Any]], repo: str) -> str:
         subsystem = record.get("subsystem") or ""
 
         # Build scope label
-        scope_parts = []
         if rank == 1:
             scope_label = f"repo-scoped: {repo}"
         elif rank == 2:

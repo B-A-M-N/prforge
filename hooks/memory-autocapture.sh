@@ -7,7 +7,11 @@
 set +e  # Never block tool execution
 
 HOOK_JSON=$(cat)
-PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$SCRIPT_DIR/.." 2>/dev/null && pwd)}"
+if [ ! -f "$PLUGIN_ROOT/scripts/memory_ledger.py" ]; then
+    PLUGIN_ROOT=""
+fi
 
 # Logging (debug only, not shown to model)
 LOG_DIR="$HOME/.prforge/hook-logs"
@@ -22,13 +26,33 @@ log "Hook fired"
 # Get RUN_ID from state if available
 RUN_ID=""
 CURRENT_PHASE=""
-if [ -f ".prforge/state.json" ]; then
-    RUN_ID=$(python3 -c "import json; d=json.load(open('.prforge/state.json')); print(d.get('memory_context',{}).get('memory_run_id',''))" 2>/dev/null || echo "")
-    CURRENT_PHASE=$(python3 -c "import json; d=json.load(open('.prforge/state.json')); print(d.get('phase',''))" 2>/dev/null || echo "")
+STATE_FILE=""
+ARTIFACT_DIR=""
+
+# Resolve canonical state: check .prforge-run pointer first, then fall back to repo-local
+if [ -f ".prforge-run" ] && [ ! -L ".prforge-run" ]; then
+    ARTIFACT_DIR=$(awk -F= '$1=="artifact_dir"{print $2}' ".prforge-run" 2>/dev/null | tail -1)
+    if [ -n "$ARTIFACT_DIR" ] && [ -f "$ARTIFACT_DIR/state.json" ]; then
+        STATE_FILE="$ARTIFACT_DIR/state.json"
+    fi
+fi
+if [ -z "$STATE_FILE" ] && [ -f ".prforge/state.json" ]; then
+    STATE_FILE=".prforge/state.json"
+fi
+if [ -n "$STATE_FILE" ]; then
+    RUN_ID=$(python3 -c "import json; d=json.load(open('$STATE_FILE')); print(d.get('memory_context',{}).get('memory_run_id',''))" 2>/dev/null || echo "")
+    CURRENT_PHASE=$(python3 -c "import json; d=json.load(open('$STATE_FILE')); print(d.get('phase',''))" 2>/dev/null || echo "")
+fi
+if [ -z "$RUN_ID" ] && [ -n "$ARTIFACT_DIR" ]; then
+    RUN_ID=$(basename "$ARTIFACT_DIR")
 fi
 
 if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "None" ] || [ "$RUN_ID" = "" ]; then
     log "No RUN_ID — skipping"
+    exit 0
+fi
+if [ -z "$PLUGIN_ROOT" ]; then
+    log "No PLUGIN_ROOT — skipping ledger writes"
     exit 0
 fi
 
@@ -83,7 +107,7 @@ print(d.get('tool_input',{}).get('file_path',''))
         --run-id "$RUN_ID" \
         --type "$ARTIFACT_TYPE" \
         --path "$FILE_PATH" \
-        --run-dir "$(pwd)/.prforge/runs/$RUN_ID" 2>/dev/null || true
+        --run-dir "${ARTIFACT_DIR:-$(pwd)/.prforge/runs/$RUN_ID}" 2>/dev/null || true
 
     # Log event
     PAYLOAD=$(echo "{\"path\":\"$FILE_PATH\",\"sha256\":\"$SHA\"}" | python3 -c "import json,sys; d=json.load(sys.stdin); print(json.dumps(d))" 2>/dev/null || echo "{}")
@@ -139,7 +163,7 @@ print(d.get('tool_input',{}).get('file_path',''))
         --run-id "$RUN_ID" \
         --type "file" \
         --path "$FILE_PATH" \
-        --run-dir "$(pwd)/.prforge/runs/$RUN_ID" 2>/dev/null || true
+        --run-dir "${ARTIFACT_DIR:-$(pwd)/.prforge/runs/$RUN_ID}" 2>/dev/null || true
 
     PAYLOAD="{\"path\":\"$FILE_PATH\",\"sha256\":\"$SHA\"}"
     python3 "$PLUGIN_ROOT/scripts/memory_ledger.py" append-event \
@@ -163,19 +187,69 @@ print(d.get('tool_input',{}).get('command',''))
         exit 0
     fi
 
-    # Log bash command event
-    # Escape the command for JSON
-    PAYLOAD=$(echo "$CMD" | python3 -c "
-import json,sys
-cmd = sys.stdin.read()
-d = {'command': cmd.strip()}
-print(json.dumps(d))
-" 2>/dev/null || echo "{}")
+    # Log post-run command evidence. Claude Code hook payloads have varied over
+    # time, so extract exit/output fields from common response locations.
+    PAYLOAD=$(PRFORGE_HOOK_JSON="$HOOK_JSON" python3 - "$CMD" <<'PY'
+import hashlib
+import json
+import os
+import sys
+
+cmd = sys.argv[1]
+try:
+    hook = json.loads(os.environ.get("PRFORGE_HOOK_JSON", "{}"))
+except Exception:
+    hook = {}
+
+def first(*values):
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+response = first(
+    hook.get("tool_response"),
+    hook.get("tool_result"),
+    hook.get("result"),
+    hook.get("response"),
+    {},
+)
+if not isinstance(response, dict):
+    response = {}
+
+stdout = first(response.get("stdout"), response.get("output"), response.get("text"), "")
+stderr = first(response.get("stderr"), response.get("error"), "")
+exit_code = first(
+    response.get("exit_code"),
+    response.get("returncode"),
+    response.get("status_code"),
+    hook.get("exit_code"),
+    hook.get("returncode"),
+)
+
+def digest(value):
+    if value is None:
+        value = ""
+    if not isinstance(value, str):
+        value = json.dumps(value, sort_keys=True)
+    return hashlib.sha256(value.encode()).hexdigest()
+
+payload = {
+    "command": cmd.strip(),
+    "cwd": os.getcwd(),
+    "exit_code": exit_code,
+    "stdout_sha256": digest(stdout),
+    "stderr_sha256": digest(stderr),
+    "output_sha256": digest(str(stdout) + "\0" + str(stderr)),
+}
+print(json.dumps(payload, sort_keys=True))
+PY
+)
 
     python3 "$PLUGIN_ROOT/scripts/memory_ledger.py" append-event \
         --run-id "$RUN_ID" \
         --phase "$CURRENT_PHASE" \
-        --type "bash_command" \
+        --type "bash_command_result" \
         --payload "$PAYLOAD" 2>/dev/null || true
 
     log "Logged bash command: $CMD"
@@ -187,7 +261,7 @@ print(json.dumps(d))
         COMMIT_HASH=$(git rev-parse HEAD 2>/dev/null || echo "")
         if [ -n "$COMMIT_HASH" ]; then
             # Create a temp file with commit info
-            TMPFILE=".prforge/runs/$RUN_ID/commits.jsonl"
+            TMPFILE="${ARTIFACT_DIR:-.prforge/runs/$RUN_ID}/commits.jsonl"
             mkdir -p "$(dirname $TMPFILE)" 2>/dev/null
             echo "{\"hash\":\"$COMMIT_HASH\",\"timestamp\":\"$(date -Iseconds)\"}" >> "$TMPFILE" 2>/dev/null || true
 
@@ -195,7 +269,7 @@ print(json.dumps(d))
                 --run-id "$RUN_ID" \
                 --type "commit" \
                 --path "$TMPFILE" \
-                --run-dir "$(pwd)/.prforge/runs/$RUN_ID" 2>/dev/null || true
+                --run-dir "${ARTIFACT_DIR:-$(pwd)/.prforge/runs/$RUN_ID}" 2>/dev/null || true
 
             log "Registered commit: $COMMIT_HASH"
         fi

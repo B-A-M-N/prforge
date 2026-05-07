@@ -757,6 +757,24 @@ if [ -f "$CONTRACT" ] && [ ! -f "$VALIDATION" ]; then
   ISSUES+=("PR Contract exists but no validation ledger — run validation first")
 fi
 
+# --- Executable approval verifier ---
+# Keep this near the end so legacy shell diagnostics remain visible, but make
+# the final public-action decision depend on the same verifier /pr-approve uses.
+APPROVAL_VERIFIER="$SCRIPT_DIR/../scripts/pr_approve.py"
+if [ "$IS_PUBLIC_ACTION" = "true" ] && [ "$PHASE" = "APPROVAL" ]; then
+  if [ ! -f "$APPROVAL_VERIFIER" ]; then
+    ISSUES+=("Executable approval verifier missing: $APPROVAL_VERIFIER")
+  else
+    VERIFY_JSON=$(python3 "$APPROVAL_VERIFIER" --repo "$REPO_ROOT" --json "$CMD" 2>/dev/null || true)
+    VERIFY_OK=$(printf "%s" "$VERIFY_JSON" | python3 -c "import json,sys; print('true' if json.load(sys.stdin).get('ok') else 'false')" 2>/dev/null || echo "false")
+    if [ "$VERIFY_OK" != "true" ]; then
+      while IFS= read -r issue; do
+        [ -n "$issue" ] && ISSUES+=("Approval verifier: $issue")
+      done < <(printf "%s" "$VERIFY_JSON" | python3 -c "import json,sys; [print(x) for x in json.load(sys.stdin).get('issues', [])]" 2>/dev/null || echo "approval verification failed")
+    fi
+  fi
+fi
+
 # --- Output ---
 if [ ${#ISSUES[@]} -gt 0 ]; then
   prforge_write_redirect "$REPO_ROOT" "$HARNESS_DIR" "public_action_preflight" "$CMD" "upstream_public_action" "${PHASE:-UNKNOWN}" "regenerate package/approval after resolving preflight issues" "${PHASE:-APPROVAL}" "$ORIGINAL_OBJECTIVE" || true

@@ -7,15 +7,15 @@
     "version": { "type": "string", "const": "1.0" },
     "phase": {
       "type": "string",
-      "enum": ["INTAKE", "CONTRACT", "REPRODUCE", "IMPLEMENT",
+      "enum": ["INTAKE", "INVESTIGATE", "PLAN", "IMPLEMENT",
                "VALIDATE", "SELF_REVIEW", "PACKAGE", "APPROVAL",
                "POSTMORTEM", "MEMORY_INDEX", "COMPLETE",
                "ABORTED", "BLOCKED",
                "SCOPE_RECONCILE", "STATE_SYNC_REPAIR",
                "LEASE_RENEWAL_REPAIR", "REVIEW_REFRESH",
-               "CONTRACT_UPDATE", "PLAN_UPDATE",
+               "SCOPE_UPDATE", "PLAN_UPDATE",
                "VALIDATION_REPAIR", "INTELLIGENCE_REPAIR", "ARTIFACT_REPAIR",
-               "COORDINATOR_RECONCILE"]
+               "COORDINATOR_RECONCILE", "STYLE_REPAIR", "COMMIT_REPAIR", "POLL_CI"]
     },
     "outcome": {
       "type": ["string", "null"],

@@ -60,9 +60,8 @@ case "$NEW_PHASE" in
   SELF_REVIEW)         PLAYBOOK="self_review.md" ;;
   PACKAGE)             PLAYBOOK="package.md" ;;
   APPROVAL)            PLAYBOOK="approval.md" ;;
-  SHIPPED|SHIPPED_PENDING) PLAYBOOK="shipped.md" ;;
   BLOCKED)             PLAYBOOK="blocked.md" ;;
-  SCOPE_RECONCILE|STATE_SYNC_REPAIR|LEASE_RENEWAL_REPAIR|REVIEW_REFRESH|CONTRACT_UPDATE|PLAN_UPDATE|VALIDATION_REPAIR|INTELLIGENCE_REPAIR|ARTIFACT_REPAIR|COORDINATOR_RECONCILE)
+  SCOPE_RECONCILE|STATE_SYNC_REPAIR|LEASE_RENEWAL_REPAIR|REVIEW_REFRESH|SCOPE_UPDATE|PLAN_UPDATE|VALIDATION_REPAIR|INTELLIGENCE_REPAIR|ARTIFACT_REPAIR|COORDINATOR_RECONCILE|STYLE_REPAIR|COMMIT_REPAIR|POLL_CI)
     PLAYBOOK="blocked.md"
     ;;
   *)
@@ -146,18 +145,15 @@ case "$NEW_PHASE" in
     echo "  • User silence is NOT approval — wait for affirmative response"
     echo "  • 'Looks good', 'yes', 'go ahead', 'push it' all count"
     ;;
-  SHIPPED|SHIPPED_PENDING)
-    echo "  • Verify idempotency guard FIRST: consumed != true"
-    echo "  • Verify diff_hash and validation_hash still match"
-    echo "  • Execute ONLY actions in state.approval.approved_actions"
-    echo "  • Append to shipping_ledger.json after each public action"
-    echo "  • Set approval.consumed = true when done"
-    ;;
-  SCOPE_RECONCILE|STATE_SYNC_REPAIR|LEASE_RENEWAL_REPAIR|REVIEW_REFRESH|CONTRACT_UPDATE|PLAN_UPDATE|VALIDATION_REPAIR|INTELLIGENCE_REPAIR|ARTIFACT_REPAIR|COORDINATOR_RECONCILE)
+  SCOPE_RECONCILE|STATE_SYNC_REPAIR|LEASE_RENEWAL_REPAIR|REVIEW_REFRESH|SCOPE_UPDATE|PLAN_UPDATE|VALIDATION_REPAIR|INTELLIGENCE_REPAIR|ARTIFACT_REPAIR|COORDINATOR_RECONCILE|STYLE_REPAIR|COMMIT_REPAIR|POLL_CI)
     echo "  • This is a recoverable redirect, not task completion"
     echo "  • Read redirects/current.json and perform the required next action"
     echo "  • Keep the original objective pinned"
     echo "  • Return to the prior phase after repair"
+    if [ "$NEW_PHASE" = "SCOPE_UPDATE" ]; then
+      echo "  • Update contract.md and patch_plan.md to reflect the new scope"
+      echo "  • Re-hash dod.md after scope change"
+    fi
     if [ "$NEW_PHASE" = "INTELLIGENCE_REPAIR" ]; then
       echo "  • Probe GitNexus and record intelligence.evidence before PLAN"
       echo "  • If GitNexus is unavailable, document unavailable_reason and fallback_commands"
