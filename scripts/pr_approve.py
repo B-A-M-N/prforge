@@ -117,7 +117,25 @@ def command_uses_upstream_push(command: str) -> bool:
         parts = shlex.split(command)
     except ValueError:
         parts = command.split()
-    return len(parts) >= 3 and parts[0:2] == ["git", "push"] and parts[2] == "upstream"
+    if len(parts) < 3 or parts[0:2] != ["git", "push"]:
+        return False
+
+    options_with_value = {
+        "--receive-pack", "--exec", "--push-option", "-o",
+    }
+    i = 2
+    while i < len(parts):
+        part = parts[i]
+        if part == "--":
+            i += 1
+            break
+        if not part.startswith("-"):
+            return part == "upstream"
+        if part in options_with_value and i + 1 < len(parts):
+            i += 2
+            continue
+        i += 1
+    return i < len(parts) and parts[i] == "upstream"
 
 
 def raw_force_requested(command: str) -> bool:

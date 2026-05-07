@@ -263,6 +263,10 @@ if python3 "$ROOT/scripts/pr_approve.py" --repo "$REPO" "git push upstream maste
   fail "approval verifier allowed upstream push"
 fi
 assert_contains "push to upstream" "$TMP/upstream.out"
+if python3 "$ROOT/scripts/pr_approve.py" --repo "$REPO" "git push -u upstream master" >"$TMP/upstream-option.out" 2>&1; then
+  fail "approval verifier allowed option-form upstream push"
+fi
+assert_contains "push to upstream" "$TMP/upstream-option.out"
 python3 "$ROOT/scripts/pr_approve.py" --repo "$REPO" "git push origin master" >/dev/null
 pass "approval verifier blocks raw force/upstream and accepts approved push"
 
