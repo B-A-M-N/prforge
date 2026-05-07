@@ -3,6 +3,13 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 
+# Cleanup repo-local artifacts created during tests
+cleanup_test_artifacts() {
+  rm -f "$ROOT/.prforge-run"
+  rm -rf "$ROOT/.prforge"
+}
+trap cleanup_test_artifacts EXIT
+
 fail() {
   echo "FAIL: $1" >&2
   exit 1
