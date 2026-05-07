@@ -15,6 +15,25 @@
 
 set -euo pipefail
 
+MONITOR_NAME="prforge-distributed-worker-watch"
+PID_DIR="${PRFORGE_MONITOR_PID_DIR:-$HOME/.prforge/monitors}"
+PID_FILE="$PID_DIR/$MONITOR_NAME.pid"
+LOCK_FILE="$PID_DIR/$MONITOR_NAME.lock"
+
+setup_monitor_lifecycle() {
+  mkdir -p "$PID_DIR" 2>/dev/null || true
+  exec 9>"$LOCK_FILE"
+  if command -v flock >/dev/null 2>&1; then
+    if ! flock -n 9; then
+      exit 0
+    fi
+  elif [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE" 2>/dev/null)" 2>/dev/null; then
+    exit 0
+  fi
+  echo "$$" > "$PID_FILE" 2>/dev/null || true
+  trap 'rm -f "$PID_FILE"; exit 0' INT TERM EXIT
+}
+
 # --- Resolve paths -----------------------------------------------------------
 REPO_ROOT=""
 ARTIFACT_DIR=""
@@ -283,8 +302,12 @@ main() {
   return 0
 }
 
+setup_monitor_lifecycle
 INTERVAL="${PRFORGE_WORKER_WATCH_INTERVAL:-15}"
+if ! [[ "$INTERVAL" =~ ^[0-9]+$ ]]; then INTERVAL=15; fi
+[ "$INTERVAL" -lt 5 ] && INTERVAL=5
 while true; do
   main 2>/dev/null || true
+  [ "${PRFORGE_MONITOR_ONCE:-}" = "1" ] && break
   sleep "$INTERVAL"
 done

@@ -17,6 +17,25 @@
 
 set -euo pipefail
 
+MONITOR_NAME="prforge-distributed-coordinator-watch"
+PID_DIR="${PRFORGE_MONITOR_PID_DIR:-$HOME/.prforge/monitors}"
+PID_FILE="$PID_DIR/$MONITOR_NAME.pid"
+LOCK_FILE="$PID_DIR/$MONITOR_NAME.lock"
+
+setup_monitor_lifecycle() {
+  mkdir -p "$PID_DIR" 2>/dev/null || true
+  exec 9>"$LOCK_FILE"
+  if command -v flock >/dev/null 2>&1; then
+    if ! flock -n 9; then
+      exit 0
+    fi
+  elif [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE" 2>/dev/null)" 2>/dev/null; then
+    exit 0
+  fi
+  echo "$$" > "$PID_FILE" 2>/dev/null || true
+  trap 'rm -f "$PID_FILE"; exit 0' INT TERM EXIT
+}
+
 # --- Resolve paths -----------------------------------------------------------
 REPO_ROOT=""
 ARTIFACT_DIR=""
@@ -47,7 +66,22 @@ now() {
 
 # --- Redis CLI wrapper (via prforge_mesh.py or direct redis-cli) --------------
 redis_cmd() {
-  redis-cli "$@" 2>/dev/null || true
+  timeout 2s redis-cli --raw "$@" 2>/dev/null || true
+}
+
+redis_scan_keys() {
+  local pattern="$1"
+  local cursor="0"
+  local response next keys
+  while :; do
+    response=$(redis_cmd SCAN "$cursor" MATCH "$pattern" COUNT 100)
+    [ -z "$response" ] && return 0
+    next=$(printf "%s\n" "$response" | sed -n '1p')
+    keys=$(printf "%s\n" "$response" | sed '1d')
+    [ -n "$keys" ] && printf "%s\n" "$keys"
+    [ "$next" = "0" ] && return 0
+    cursor="$next"
+  done
 }
 
 find_context() {
@@ -110,7 +144,7 @@ watch_queue() {
   # Active worker jobs (scan node hashes for status=active)
   local active=0
   local nodes
-  nodes=$(redis_cmd KEYS "${prefix}:node:*" 2>/dev/null) || nodes=""
+  nodes=$(redis_scan_keys "${prefix}:node:*") || nodes=""
   for node_key in $nodes; do
     local status
     status=$(redis_cmd HGET "$node_key" status 2>/dev/null) || status=""
@@ -150,7 +184,7 @@ watch_worker_heartbeat() {
   local stale_threshold=60  # seconds without heartbeat = stale
 
   local nodes
-  nodes=$(redis_cmd KEYS "${prefix}:node:*" 2>/dev/null) || nodes=""
+  nodes=$(redis_scan_keys "${prefix}:node:*") || nodes=""
   for node_key in $nodes; do
     local roles
     roles=$(redis_cmd HGET "$node_key" roles 2>/dev/null) || roles=""
@@ -211,7 +245,7 @@ watch_stale_leases() {
 
   # Scan job keys
   local jobs
-  jobs=$(redis_cmd KEYS "${prefix}:job:*" 2>/dev/null) || jobs=""
+  jobs=$(redis_scan_keys "${prefix}:job:*") || jobs=""
   for job_key in $jobs; do
     local status
     status=$(redis_cmd HGET "$job_key" status 2>/dev/null) || status=""
@@ -309,7 +343,7 @@ watch_reviewer_dispatch() {
   local review_response_approval=0
 
   local jobs
-  jobs=$(redis_cmd KEYS "${prefix}:job:*" 2>/dev/null) || jobs=""
+  jobs=$(redis_scan_keys "${prefix}:job:*") || jobs=""
   for job_key in $jobs; do
     local jtype
     jtype=$(redis_cmd HGET "$job_key" type 2>/dev/null) || jtype=""
@@ -351,7 +385,7 @@ watch_redis_audit_pending() {
   local prefix="Workflow:${cluster}"
 
   local audit_keys
-  audit_keys=$(redis_cmd KEYS "${prefix}:audit_pending:*" 2>/dev/null) || audit_keys=""
+  audit_keys=$(redis_scan_keys "${prefix}:audit_pending:*") || audit_keys=""
 
   for akey in $audit_keys; do
     local last_seen="${LAST[$akey]:-}"
@@ -404,8 +438,12 @@ main() {
   return 0
 }
 
+setup_monitor_lifecycle
 INTERVAL="${PRFORGE_COORDINATOR_WATCH_INTERVAL:-10}"
+if ! [[ "$INTERVAL" =~ ^[0-9]+$ ]]; then INTERVAL=10; fi
+[ "$INTERVAL" -lt 5 ] && INTERVAL=5
 while true; do
   main 2>/dev/null || true
+  [ "${PRFORGE_MONITOR_ONCE:-}" = "1" ] && break
   sleep "$INTERVAL"
 done
