@@ -443,9 +443,10 @@ job = {
     'head_branch': 'fix/validate',
 }
 
-# Pre-occupy the PR lease to force partial failure
-pr_lk = rb.lease_pr(cluster, job['repo'], str(job['pr_number']))
-r.set(pr_lk, 'other_job', ex=30)
+# Pre-occupy the target lease to force partial failure.
+repo_slug = job['repo'].replace('/', '_')
+target_lk = rb.lease_target(cluster, repo_slug, 'pr', str(job['pr_number']))
+r.set(target_lk, 'other_job', ex=30)
 
 ok, acquired = rb.acquire_job_leases(r, cluster, job, 'worker-test', 30)
 assert not ok, 'Should fail when PR lease is occupied'
@@ -457,7 +458,7 @@ val = r.get(jlk)
 assert val is None, f'Job lease should have been released on failure, got {val}'
 
 # Cleanup
-r.delete(pr_lk)
+r.delete(target_lk)
 print('OK')
 " | grep -q "OK" && pass "H: 4-lease atomic acquire (rollback on partial failure)" || \
     fail "H: atomic lease acquire" "lease rollback on partial failure incorrect"
@@ -1078,19 +1079,25 @@ rb.upsert_job(r, cluster, {
 })
 
 # Create leases so the reaper can release them
-from redis_backend import lease_job, lease_pr, lease_branch, lease_worker
-r.set(lease_job(cluster, 'validate_stale_job_1'), 'validate_stale_worker', ex=1800)
-r.set(lease_pr(cluster, 'validate/stale_repo', '1'), 'validate_stale_job_1', ex=1800)
-r.set(lease_branch(cluster, 'validate/stale_repo', 'fix/stale'), 'validate_stale_job_1', ex=1800)
-r.set(lease_worker(cluster, 'validate_stale_worker'), 'validate_stale_job_1', ex=1800)
+from redis_backend import lease_job, lease_target, lease_branch, lease_worker
+repo_slug = 'validate/stale_repo'.replace('/', '_')
+lease_value = json.dumps({
+    'worker_id': 'validate_stale_worker',
+    'job_id': 'validate_stale_job_1',
+    'repo': 'validate/stale_repo',
+})
+r.set(lease_job(cluster, 'validate_stale_job_1'), lease_value, ex=1800)
+r.set(lease_target(cluster, repo_slug, 'pr', '1'), lease_value, ex=1800)
+r.set(lease_branch(cluster, 'validate/stale_repo', 'fix/stale'), lease_value, ex=1800)
+r.set(lease_worker(cluster, 'validate_stale_worker'), lease_value, ex=1800)
 
 # Simulate worker death: delete the node hash
 r.delete(f'Workflow:{cluster}:node:validate_stale_worker')
 r.srem(f'Workflow:{cluster}:nodes', 'validate_stale_worker')
 
-    # Run the reaper (same logic as coordinator._tick)
-    from coordinator import _reap_stale_workers
-    _reap_stale_workers(r, cluster, None)
+# Run the reaper (same logic as coordinator._tick)
+from coordinator import _reap_stale_workers
+_reap_stale_workers(r, cluster, None)
 
 # Verify job was requeued (status=queued, retry_count=1)
 job = rb.get_job(r, cluster, 'validate_stale_job_1')
@@ -1101,7 +1108,7 @@ assert job.get('assigned_node') == '', f'Expected empty assigned_node, got {job.
 
 # Verify leases were released
 assert r.get(lease_job(cluster, 'validate_stale_job_1')) is None, 'Job lease should be released'
-assert r.get(lease_pr(cluster, 'validate/stale_repo', '1')) is None, 'PR lease should be released'
+assert r.get(lease_target(cluster, repo_slug, 'pr', '1')) is None, 'target lease should be released'
 
 # Cleanup
 r.delete(f'Workflow:{cluster}:job:validate_stale_job_1')
@@ -1168,7 +1175,7 @@ sig_key = 'validate_mesh_test_key_2026'
 def _signed_verdict(decision, checks=None):
     v = {'decision': decision, 'timestamp': '2026-05-03T00:00:00+00:00',
          'all_pass': decision.endswith('_pass'), 'checks': checks or {}}
-    return json.loads(json.dumps(_sign(v, sig_key)))
+    return json.loads(json.dumps(sign_artifact(v, sig_key)))
 
 def _write_artifacts_with_missing(td, missing_key=None):
     mesh = Path(td) / '.prforge' / 'mesh'
