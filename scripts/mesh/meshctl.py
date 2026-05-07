@@ -31,7 +31,9 @@ LOCAL_DIR = PRFORGE_DIR / "local"
 LAN_DIR = PRFORGE_DIR / "lan"
 SESSIONS_DIR = PRFORGE_DIR / "sessions"
 LOCK_FILE = LOCAL_DIR / ".assign.lock"
-REDIS_LOCAL_PORT_DEFAULT = 6385
+LOCAL_PORT_RANGE = range(6380, 6386)   # 6380-6385
+LAN_PORT_RANGE = range(6386, 6396)     # 6386-6395
+REDIS_LOCAL_PORT_DEFAULT = 6380
 REDIS_LAN_PORT_DEFAULT = 6386
 
 
@@ -117,14 +119,9 @@ def release_lock(lock_path: Path) -> None:
 # Port Detection
 # ---------------------------------------------------------------------------
 
-def find_available_port(start_port: int, attempts: int = 5) -> int:
-    """Find an available port starting from start_port."""
-    env_override = os.environ.get("PRFORGE_REDIS_PORT")
-    if env_override:
-        return int(env_override)
-
-    for i in range(attempts):
-        port = start_port + i
+def find_available_port(port_range: range) -> int:
+    """Find an available port within the given range. Raises RuntimeError if none found."""
+    for port in port_range:
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             s.bind(("127.0.0.1", port))
@@ -132,24 +129,43 @@ def find_available_port(start_port: int, attempts: int = 5) -> int:
             return port
         except OSError:
             continue
-    return start_port  # fallback
+    raise RuntimeError(
+        f"No available ports in range {port_range.start}-{port_range.stop - 1}"
+    )
 
 
 def get_redis_port(mode: str, config: dict = None) -> int:
-    """Get the Redis port for a mode, reading from config if available."""
+    """Get the Redis port for a mode. Validates explicit overrides stay in the mode's reserved range."""
+    port = None
+
     env_override = os.environ.get("PRFORGE_REDIS_PORT")
     if env_override:
-        return int(env_override)
+        port = int(env_override)
 
-    if config:
-        port = config.get("redis_port")
-        if port:
-            return int(port)
+    if port is None and config:
+        cp = config.get("redis_port")
+        if cp:
+            port = int(cp)
 
+    if port is not None:
+        # Validate explicit port is within the mode's reserved range
+        if mode == "local" and port not in LOCAL_PORT_RANGE:
+            raise ValueError(
+                f"local mode Redis port must be in "
+                f"{LOCAL_PORT_RANGE.start}-{LOCAL_PORT_RANGE.stop - 1}, got {port}"
+            )
+        if mode == "lan" and port not in LAN_PORT_RANGE:
+            raise ValueError(
+                f"LAN mode Redis port must be in "
+                f"{LAN_PORT_RANGE.start}-{LAN_PORT_RANGE.stop - 1}, got {port}"
+            )
+        return port
+
+    # Auto-detect within the mode's reserved range
     if mode == "local":
-        return find_available_port(REDIS_LOCAL_PORT_DEFAULT)
+        return find_available_port(LOCAL_PORT_RANGE)
     else:
-        return find_available_port(REDIS_LAN_PORT_DEFAULT)
+        return find_available_port(LAN_PORT_RANGE)
 
 
 # ---------------------------------------------------------------------------
@@ -378,17 +394,17 @@ def get_service_name(mode: str, node_id: str) -> str:
 
 def generate_service_file(mode: str, node_id: str, redis_url: str,
                        mesh_scripts: Path) -> Path:
-    """Generate systemd service file. Returns path to service file."""
+    """Generate systemd service file. Returns path to service file.
+
+    Uses absolute paths in Environment= lines — systemd does NOT expand $HOME.
+    """
     service_name = get_service_name(mode, node_id)
     service_dir = Path.home() / ".config" / "systemd" / "user"
     service_dir.mkdir(parents=True, exist_ok=True)
     service_path = service_dir / service_name
 
+    home = str(Path.home())
     env_file = PRFORGE_DIR / "mesh.env"
-    if mode == "local":
-        node_type = "watchtower" if node_id == "watchtower" else "worker"
-    else:
-        node_type = "coordinator+auditor" if node_id == "watchtower" else "worker"
 
     # Determine the command
     if node_id == "watchtower":
@@ -399,6 +415,11 @@ def generate_service_file(mode: str, node_id: str, redis_url: str,
     node_dir = get_node_dir(mode, node_id)
     config_path = node_dir / "config.json"
 
+    # Build worker_id for worker nodes
+    worker_id_env = ""
+    if node_id != "watchtower":
+        worker_id_env = f"Environment=PRFORGE_WORKER_ID={node_id}"
+
     content = f"""\
 [Unit]
 Description=PRForge Mesh {node_id} ({mode})
@@ -407,7 +428,10 @@ After=network-online.target
 [Service]
 Type=simple
 EnvironmentFile={env_file}
+Environment=PRFORGE_MESH_ACTIVE=1
+Environment=PRFORGE_MESH_MODE={mode}
 Environment=PRFORGE_MESH_CONFIG={config_path}
+{worker_id_env}
 WorkingDirectory={mesh_scripts}
 ExecStart=/usr/bin/python3 {mesh_scripts}/prforge_mesh.py --config {config_path} {cmd}
 Restart=on-failure

@@ -31,6 +31,36 @@ REPO_CACHE_ROOT = Path.home() / ".prforge" / "repos"
 WORKTREE_ROOT = Path.home() / ".prforge" / "worktrees"
 QUARANTINE_ROOT = Path.home() / ".prforge" / "quarantine"
 
+VALID_PRFORGE_SUBDIRS = {"worktrees", "repos", "quarantine"}
+
+
+def validate_worktree_root(path: Path) -> None:
+    """Guard against typos and invalid worktree root paths.
+
+    Catches:
+    - '.prprforge' typo (ghost state)
+    - Paths outside ~/.prforge state directory
+    - Suspicious subdirectory names (not worktrees/repos/quarantine)
+    """
+    resolved = path.expanduser().resolve()
+
+    if ".prprforge" in resolved.parts:
+        raise RuntimeError(
+            f"Refusing suspicious worktree root with '.prprforge': {resolved}"
+        )
+
+    if ".prforge" not in resolved.parts:
+        raise RuntimeError(
+            f"Refusing worktree root outside PRForge state dir. "
+            f"Expected path under ~/.prforge. Got: {resolved}"
+        )
+
+    if resolved.name not in VALID_PRFORGE_SUBDIRS:
+        raise RuntimeError(
+            f"Refusing suspicious PRForge root '{resolved.name}'. "
+            f"Expected one of {sorted(VALID_PRFORGE_SUBDIRS)}. Full path: {resolved}"
+        )
+
 
 def load_config() -> dict:
     if not CONFIG_PATH.exists():
@@ -65,6 +95,7 @@ def run(cmd: list[str], cwd: Optional[Path] = None, check: bool = True) -> str:
 
 def ensure_bare_cache(repo_url: str, repo_key: str) -> Path:
     """Clone or fetch bare repo cache."""
+    validate_worktree_root(REPO_CACHE_ROOT)
     bare = bare_repo_path(repo_key)
     if not bare.exists():
         print(f"Cloning bare cache: {repo_url}")
@@ -94,6 +125,9 @@ def create_checkout(
     task_slug: str,
 ) -> dict:
     """Create isolated worktree for a job. Returns checkout metadata."""
+    # Validate worktree root before any operations
+    validate_worktree_root(WORKTREE_ROOT)
+
     # Ensure directories exist
     CHECKOUTS_DIR.mkdir(parents=True, exist_ok=True)
     WORKTREE_ROOT.mkdir(parents=True, exist_ok=True)

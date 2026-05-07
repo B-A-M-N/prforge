@@ -73,11 +73,14 @@ PRIORITY_ORDER = {"P0": 0, "P1": 1, "P2": 2, "P3": 3, "P4": 4}
 # Job types that workers may execute. audit_only is auditor-side only.
 WORKER_JOB_TYPES = {
     "review_response", "pr_polish", "ci_fix_related_to_branch", "new_pr",
-    "same_file_review_assist",
+    "same_file_review_assist", "integration",
 }
 
 # Sub-types that are coordinator-certified (require path lock acquisition)
 MUTATING_JOB_TYPES = {"review_response", "pr_polish", "ci_fix_related_to_branch", "new_pr"}
+
+# Advisory/read-only job types — never need path locks
+READONLY_JOB_TYPES = {"same_file_review_assist"}
 
 # Artifact directory convention
 ARTIFACT_BASE = Path.home() / ".prforge-mesh" / "artifacts"
@@ -298,6 +301,9 @@ def _tick(r: redis.Redis, cluster: str, lease_ttl: int, config: dict | None = No
         logger.info("Dispatched job_id=%s worker=%s repo=%s pr=%s priority=%s",
                     job_id, wid, repo, pr, job.get("priority"))
 
+    # Handle PLAN→IMPLEMENT transitions: check for plan_ready jobs and certify IMPLEMENT
+    _process_plan_ready_jobs(r, cluster, config)
+
     # Stale worker reaper: detect dead workers and requeue their jobs
     _reap_stale_workers(r, cluster, config)
 
@@ -434,6 +440,155 @@ def _create_advisory_job(
         "owner_job_id": owner_job_id,
         "locked_paths": json.dumps(locked_paths),
     })
+
+
+def _process_plan_ready_jobs(
+    r: redis.Redis,
+    cluster: str,
+    config: dict | None,
+) -> None:
+    """Check for jobs that have completed PLAN and need IMPLEMENT certification.
+
+    When a worker writes plan_ready to outbox/status.json, the coordinator reads
+    the declared_write_set, acquires path locks atomically, and creates an
+    IMPLEMENT job. If path locks fail, creates an advisory job instead.
+    """
+    if config is None:
+        return
+
+    worker_cfg = config.get("worker", {})
+    repo_roots = worker_cfg.get("repo_roots", [])
+
+    cursor = 0
+    while True:
+        cursor, keys = r.scan(cursor, match=f"Workflow:{cluster}:job:*", count=100)
+        for jk in keys:
+            job_data = r.hgetall(jk)
+            if not job_data:
+                continue
+
+            # Look for jobs that are active and have plan_ready status
+            if job_data.get("status") != "active":
+                continue
+
+            job_id = job_data.get("job_id", "")
+            assigned_node = job_data.get("assigned_node", "")
+            repo = job_data.get("repo", "")
+
+            if not job_id or not assigned_node:
+                continue
+
+            # Check if worker has written plan_ready
+            repo_path = _resolve_repo_path(repo, repo_roots)
+            if not repo_path:
+                continue
+
+            artifact_dir = _read_pointer_artifact_dir(repo_path)
+            status_path = artifact_dir / "outbox" / "status.json"
+            if not status_path.exists():
+                continue
+
+            try:
+                status = json.loads(status_path.read_text())
+            except (json.JSONDecodeError, OSError):
+                continue
+
+            if status.get("status") != "plan_ready":
+                continue
+
+            # Check if IMPLEMENT job already created for this plan
+            implement_marker = f"Workflow:{cluster}:implement_certified:{job_id}"
+            if r.exists(implement_marker):
+                continue
+
+            # Read declared_write_set from scope.json
+            scope_path = artifact_dir / "scope.json"
+            write_set = []
+            if scope_path.exists():
+                try:
+                    scope = json.loads(scope_path.read_text())
+                    write_set = scope.get("declared_write_set", [])
+                except (json.JSONDecodeError, OSError):
+                    pass
+
+            if not write_set:
+                logger.warning(
+                    "Job %s plan_ready but no declared_write_set — skipping IMPLEMENT certification",
+                    job_id,
+                )
+                continue
+
+            # Resolve directories to concrete files
+            resolved_write_set = _resolve_write_set_paths(repo_path, write_set)
+            if not resolved_write_set:
+                logger.warning(
+                    "Job %s plan_ready but write_set resolved to empty — skipping",
+                    job_id,
+                )
+                continue
+
+            # Atomically acquire path locks
+            repo_slug = repo.replace("/", "_")
+            path_ok, blocked = acquire_path_locks_atomic(
+                r, cluster, repo_slug, assigned_node, job_id, resolved_write_set,
+                config.get("limits", {}).get("lease_ttl_seconds", 1800),
+            )
+
+            if not path_ok:
+                logger.info(
+                    "IMPLEMENT certification failed for job=%s — creating advisory. Blocked: %s",
+                    job_id, blocked,
+                )
+                _create_advisory_job(r, cluster, dict(job_data), assigned_node, blocked, config)
+                r.setex(implement_marker, 3600, "advisory_created")
+                continue
+
+            # Path locks acquired — create IMPLEMENT certification
+            path_keys = [lease_path(cluster, repo_slug, normalize_path_for_lease(p))
+                         for p in resolved_write_set if normalize_path_for_lease(p)]
+
+            # Store path keys on the job for the worker to use
+            upsert_job(r, cluster, {
+                **{k: v for k, v in job_data.items()},
+                "path_keys": json.dumps(path_keys),
+                "write_set": json.dumps(resolved_write_set),
+            })
+
+            r.setex(implement_marker, 3600, "certified")
+
+            logger.info(
+                "IMPLEMENT certified for job=%s worker=%s paths=%s",
+                job_id, assigned_node, resolved_write_set,
+            )
+            emit_event(r, cluster, "ImplementCertified", {
+                "job_id": job_id,
+                "worker": assigned_node,
+                "write_set": json.dumps(resolved_write_set),
+            })
+
+        if cursor == 0:
+            break
+
+
+def _resolve_write_set_paths(repo_path: str, write_set: list[str]) -> list[str]:
+    """Resolve write_set entries to concrete file paths.
+
+    Directories are expanded to files within them.
+    Non-existent paths are filtered out.
+    """
+    resolved = []
+    repo = Path(repo_path)
+    for entry in write_set:
+        p = repo / entry
+        if p.is_file():
+            resolved.append(entry)
+        elif p.is_dir():
+            # Expand directory to files
+            for f in sorted(p.rglob("*")):
+                if f.is_file():
+                    resolved.append(str(f.relative_to(repo)))
+        # Non-existent paths are silently skipped
+    return resolved
 
 
 def _reap_stale_workers(
