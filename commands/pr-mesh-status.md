@@ -8,6 +8,11 @@ allowed-tools: Read, Bash
 
 This command provides a comprehensive overview of the PRForge mesh infrastructure.
 
+## Quick Status
+```bash
+bash $PRFORGE_HOME/scripts/prforge_footer.sh
+```
+
 ## Execution
 Run the following checks to verify mesh status:
 

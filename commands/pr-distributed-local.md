@@ -220,14 +220,41 @@ if worker_id_path.exists():
 PYEOF
 ```
 
+### Step 4: Export mesh env vars for the hook
+
+The mesh lock guard hook needs these to enforce worktree/path boundaries:
+
+```bash
+export PRFORGE_MESH_ACTIVE=1
+export PRFORGE_MESH_MODE=local
+export PRFORGE_MESH_CONFIG="$HOME/.prforge-mesh/config.json"
+export PRFORGE_WORKER_ID="$WORKER_ID"
+export PRFORGE_JOB_ID=""   # populated when a job is assigned
+
+echo "✓ Mesh env vars exported"
+echo "  PRFORGE_MESH_ACTIVE=1"
+echo "  PRFORGE_MESH_MODE=local"
+echo "  PRFORGE_MESH_CONFIG=$HOME/.prforge-mesh/config.json"
+echo "  PRFORGE_WORKER_ID=$WORKER_ID"
+```
+
 Print: "✓ worker online — waiting for jobs"
 Print: "Worker ID: $WORKER_ID"
 
 **After this, the worker enters the job loop.** Instruct the worker to:
 1. Poll Redis for assigned jobs
 2. For each job: acquire target lock → create worktree → cd into worktree → run PRForge pipeline
-5. After PLAN: acquire path leases
+3. After PLAN: write `plan_ready` to outbox/status.json with `declared_write_set`
+4. Wait for coordinator to certify IMPLEMENT (do NOT self-transition)
+5. During IMPLEMENT: renew path leases, enforce write restrictions
 6. Before push/PR: acquire public lease, require /pr-approve
+
+**PLAN→IMPLEMENT lifecycle**:
+- PLAN phase: read-only inspection + write `.prforge/` metadata only
+- After PLAN: write `plan_ready` status with `declared_write_set`
+- Coordinator atomically acquires path locks and certifies IMPLEMENT
+- If path locks fail: coordinator creates `same_file_review_assist` job for advisory work
+- Worker may only mutate files after coordinator certification
 
 ---
 

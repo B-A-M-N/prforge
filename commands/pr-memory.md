@@ -81,12 +81,12 @@ View or regenerate a postmortem for a specific run.
 
 ```bash
 # View existing postmortem
-cat .prforge/runs/<run_id>/postmortem.json
+cat "$ARTIFACT_DIR/postmortem.json"
 
 # Regenerate from artifacts
 python3 $PRFORGE_HOME/scripts/postmortem_generator.py generate \
-  --run-dir .prforge/runs/<run_id> \
-  --output .prforge/runs/<run_id>/postmortem.json
+  --run-dir "$ARTIFACT_DIR" \
+  --output "$ARTIFACT_DIR/postmortem.json"
 ```
 
 ---
@@ -97,8 +97,8 @@ Re-index memories from postmortem.
 
 ```bash
 python3 $PRFORGE_HOME/scripts/memory_indexer.py index \
-  --postmortem .prforge/runs/<run_id>/postmortem.json \
-  --run-dir .prforge/runs/<run_id>
+  --postmortem "$ARTIFACT_DIR/postmortem.json" \
+  --run-dir "$ARTIFACT_DIR"
 ```
 
 This:
@@ -130,14 +130,14 @@ This is the same query used at INTAKE phase. Useful for reviewing what PRForge h
 
 ```
 Layer 0 — Raw artifacts (CANONICAL TRUTH)
-  .prforge/runs/<run_id>/github/, git/, validation/, agent/
+  $ARTIFACT_DIR/github/, git/, validation/, agent/
 
 Layer 1 — SQLite ledger (manifest over artifacts)
   ~/.prforge/prforge_memory.db
   Tables: runs, artifacts, pr_events, postmortems, memory_records
 
 Layer 2 — Derived postmortem
-  .prforge/runs/<run_id>/postmortem.json
+  $ARTIFACT_DIR/postmortem.json
 
 Layer 3 — Memory records
   Scoped lessons with evidence_artifact_ids

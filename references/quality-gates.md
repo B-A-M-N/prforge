@@ -4,7 +4,8 @@ Each phase has mandatory entry criteria (must be true to enter) and exit criteri
 (must be complete before advancing). The agent may NOT skip phases unless the user
 explicitly invokes an emergency override.
 
-All artifacts are stored in `.prforge/` (not `.pr-harness/`).
+All artifacts are stored in `$ARTIFACT_DIR` outside the target repo. Resolve it
+from repo `.prforge-run`; see `references/artifact-location.md`.
 
 ---
 
@@ -14,9 +15,9 @@ All artifacts are stored in `.prforge/` (not `.pr-harness/`).
 - [ ] Task type determined (new_pr, review_response, issue_fix, ci_fix, local_task, candidate_discovery)
 - [ ] Repo identity confirmed (name, remotes, current branch)
 - [ ] Intelligence mode detected (full_gitnexus / degraded_gh / degraded_local)
-- [ ] `.prforge/` directory created
-- [ ] `.prforge/state.json` and `.prforge/task.json` written
-- [ ] Safety snapshot taken (`.prforge/snapshots/preflight.patch`)
+- [ ] `$ARTIFACT_DIR` created outside the repo
+- [ ] `$ARTIFACT_DIR/state.json` and `$ARTIFACT_DIR/task.json` written
+- [ ] Safety snapshot taken (`$ARTIFACT_DIR/snapshots/preflight.patch`)
 
 ### Exit Criteria
 - [ ] Task normalized into `task.json` with type, source_url, objective
@@ -38,8 +39,8 @@ All artifacts are stored in `.prforge/` (not `.pr-harness/`).
 - [ ] Prior related PRs/issues checked (GitNexus or gh)
 
 ### Exit Criteria
-- [ ] `.prforge/repo_intelligence.md` written
-- [ ] For review mode: `.prforge/review_decomposition.md` written with task queue
+- [ ] `$ARTIFACT_DIR/repo_intelligence.md` written
+- [ ] For review mode: `$ARTIFACT_DIR/review_decomposition.md` written with task queue
 - [ ] Risk areas identified
 
 ### Blockers (do not advance)
@@ -51,15 +52,15 @@ All artifacts are stored in `.prforge/` (not `.pr-harness/`).
 ## PLAN → IMPLEMENT
 
 ### Entry Criteria
-- [ ] `.prforge/contract.md` exists with: objective, required outcomes, allowed/forbidden changes, validation plan
-- [ ] `.prforge/patch_plan.md` written with per-file edit plan
+- [ ] `$ARTIFACT_DIR/contract.md` exists with: objective, required outcomes, allowed/forbidden changes, validation plan
+- [ ] `$ARTIFACT_DIR/patch_plan.md` written with per-file edit plan
 - [ ] Allowed files list is specific (not "the whole repo")
 - [ ] Validation plan includes actual commands
 
 ### Exit Criteria
 - [ ] Contract and patch plan written
 - [ ] Scope boundaries clear
-- [ ] **`.prforge/dod.md` generated** with issue-specific, concrete, verifiable items (not generic template text)
+- [ ] **`$ARTIFACT_DIR/dod.md` generated** with issue-specific, concrete, verifiable items (not generic template text)
   - Each item names a specific file, function, test command, or observable behavior
   - Test items include the exact command to run and expected pass count
   - All review items (R1, R2, ...) are listed if in review_response mode
@@ -109,7 +110,7 @@ All artifacts are stored in `.prforge/` (not `.pr-harness/`).
 
 ### Entry Criteria
 - [ ] All validation commands from the contract's validation plan were run
-- [ ] `.prforge/validation_ledger.md` written with honest results
+- [ ] `$ARTIFACT_DIR/validation_ledger.md` written with honest results
 - [ ] No fake validation
 
 ### Exit Criteria
@@ -128,7 +129,7 @@ All artifacts are stored in `.prforge/` (not `.pr-harness/`).
 
 ### Entry Criteria
 - [ ] Hostile review completed using `references/hostile-review-checklist.md`
-- [ ] `.prforge/hostile_review.md` written
+- [ ] `$ARTIFACT_DIR/hostile_review.md` written
 - [ ] All "no" or "unclear" answers addressed
 
 ### Exit Criteria
@@ -148,11 +149,11 @@ All artifacts are stored in `.prforge/` (not `.pr-harness/`).
 ## PACKAGE → APPROVAL
 
 ### Entry Criteria
-- [ ] `.prforge/pr_body.md` written (for new PRs)
-- [ ] `.prforge/review_response.md` written (for review responses)
+- [ ] `$ARTIFACT_DIR/pr_body.md` written (for new PRs)
+- [ ] `$ARTIFACT_DIR/review_response.md` written (for review responses)
 - [ ] PR body only includes validation commands that were actually run
-- [ ] `.prforge/approval.md` written using the approval template
-- [ ] Every item in `.prforge/dod.md` is either checked or has a documented exception
+- [ ] `$ARTIFACT_DIR/approval.md` written using the approval template
+- [ ] Every item in `$ARTIFACT_DIR/dod.md` is either checked or has a documented exception
 
 ### Exit Criteria
 - [ ] Approval artifact is complete and scannable
@@ -185,7 +186,7 @@ All artifacts are stored in `.prforge/` (not `.pr-harness/`).
 
 If the user explicitly wants to skip phases:
 
-1. Record the override in `.prforge/override.md`:
+1. Record the override in `$ARTIFACT_DIR/override.md`:
    ```markdown
    ## Override
    - Phases skipped: [list]
@@ -193,7 +194,7 @@ If the user explicitly wants to skip phases:
    - Timestamp: [ISO date]
    - User confirmed: [what they said]
    ```
-2. Update `.prforge/state.json` phase to the target phase.
+2. Update `$ARTIFACT_DIR/state.json` phase to the target phase.
 3. Proceed with the remaining gates.
 
 This exists for local/experimental work. Never use for upstream PRs.

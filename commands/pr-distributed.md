@@ -140,7 +140,37 @@ The command will:
 - Print: "✓ forge online — connected to watchtower at <host>"
   (or "✓ forge online — waiting for watchtower at <host>" if not reachable)
 
+### Step 3: Export mesh env vars for the hook
+
+```bash
+FORGE_CONFIG="$HOME/.prforge-mesh/lan/forge-$(hostname)/config.json"
+export PRFORGE_MESH_ACTIVE=1
+export PRFORGE_MESH_MODE=lan
+export PRFORGE_MESH_CONFIG="$FORGE_CONFIG"
+
+# Read worker_id from the config
+WORKER_ID=$(python3 -c "
+import json
+from pathlib import Path
+config = json.loads(Path('$FORGE_CONFIG').read_text())
+print(config.get('mesh', {}).get('node_id', ''))
+")
+export PRFORGE_WORKER_ID="$WORKER_ID"
+export PRFORGE_JOB_ID=""
+
+echo "✓ Mesh env vars exported"
+echo "  PRFORGE_MESH_MODE=lan"
+echo "  PRFORGE_MESH_CONFIG=$FORGE_CONFIG"
+echo "  PRFORGE_WORKER_ID=$WORKER_ID"
+```
+
 If the setup command fails, report the error.
+
+**PLAN→IMPLEMENT lifecycle** (same as local mode):
+- PLAN phase: read-only inspection + write `.prforge/` metadata only
+- After PLAN: write `plan_ready` status with `declared_write_set`
+- Coordinator atomically acquires path locks and certifies IMPLEMENT
+- If path locks fail: coordinator creates `same_file_review_assist` job
 
 ---
 

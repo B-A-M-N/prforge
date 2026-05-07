@@ -1,7 +1,7 @@
 ---
 name: pr
 description: "PRForge — delegated PR execution harness. Handles any PR, issue, review link, or contribution task end-to-end. Only stops for approval before publishing."
-allowed-tools: Read, Write, Edit, Bash, Grep, Glob, WebFetch, Agent
+allowed-tools: Read, Write, Edit, Bash, Grep, Glob, WebFetch, Agent, Task
 ---
 
 <!-- 
@@ -30,9 +30,9 @@ The user has provided: {{ARGS}}
    - "find PR candidates" / "find issues" → `candidate_discovery`
    - Local task description → `local_task`
 
-2. **Check for existing state:** Look for `.prforge/state.json` in the target repo.
+2. **Check for existing state:** Resolve `$ARTIFACT_DIR` from repo `.prforge-run`, then read `$ARTIFACT_DIR/state.json`.
    - If found, read it and resume from the current phase.
-   - If not found, start from INTAKE.
+   - If not found, start from INTAKE and create outside-repo artifacts plus a `.prforge-run` pointer.
 
 3. **At INTAKE, run memory preflight** before any investigation:
    ```bash
@@ -49,12 +49,12 @@ The user has provided: {{ARGS}}
    ```
 
 4. **Execute the full pipeline** from the current phase through to COMPLETE:
-   - INTAKE → CONTRACT → REPRODUCE → IMPLEMENT → VALIDATE → SELF_REVIEW → PACKAGE → APPROVAL
+   - INTAKE → INVESTIGATE → PLAN → IMPLEMENT → VALIDATE → SELF_REVIEW → PACKAGE → APPROVAL
    - After APPROVAL (user approves and action executes): POSTMORTEM → MEMORY_INDEX → COMPLETE
    - Do NOT ask the user to drive each phase. Run them automatically.
    - Show brief progress notes as you work.
 
-5. **At APPROVAL:** Write `.prforge/approval.md` and present it to the user.
+5. **At APPROVAL:** Write `$ARTIFACT_DIR/approval.md` and present it to the user.
    - Keep it scannable — the user should understand it in 15 seconds.
    - Wait for explicit approval before any upstream-facing action.
 
@@ -71,5 +71,5 @@ The user has provided: {{ARGS}}
 - You may NOT push, create PR, post comments, or force-push without user approval.
 - If you hit a blocker, present it clearly with a suggested fix.
 - Never claim tests passed unless actually run.
-- Keep progress notes brief. Put details in `.prforge/` artifacts.
+- Keep progress notes brief. Put details in `$ARTIFACT_DIR` artifacts outside the repo.
 - Memory phases (POSTMORTEM, MEMORY_INDEX) run automatically after APPROVAL — do not ask the user to trigger them.

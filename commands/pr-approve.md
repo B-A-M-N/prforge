@@ -7,6 +7,15 @@ description: "Approve the current PRForge release gate and execute the pending u
 
 The user has approved the release. **Verify integrity BEFORE executing anything.**
 
+Before any public command, run the executable verifier. If it fails, stop:
+
+```bash
+python3 "$CLAUDE_PLUGIN_ROOT/scripts/pr_approve.py" --repo "$(git rev-parse --show-toplevel)" "<exact command you are about to run>"
+```
+
+The verifier is authoritative. The manual checks below explain the contract; do
+not treat them as a substitute for the executable result.
+
 ## Step 0: Manager Mode check (distributed mode only)
 
 Resolve the current run artifact directory first:
@@ -77,9 +86,9 @@ Read `$ARTIFACT_DIR/mesh/mesh_certification.json`:
 
    # Recompute current diff hash
    import subprocess
-   diff_out = subprocess.run(["git", "diff", "--stat"], capture_output=True, text=True).stdout
-   staged_out = subprocess.run(["git", "diff", "--cached", "--stat"], capture_output=True, text=True).stdout
-   current_diff_hash = hashlib.sha256((diff_out + staged_out).encode()).hexdigest()
+   diff_out = subprocess.run(["git", "diff", "--binary", "--full-index"], capture_output=True).stdout
+   staged_out = subprocess.run(["git", "diff", "--cached", "--binary", "--full-index"], capture_output=True).stdout
+   current_diff_hash = hashlib.sha256(diff_out + b"\0PRFORGE-STAGED\0" + staged_out).hexdigest()
 
    if current_diff_hash != cert["hashes"]["diff"]:
        print("DIFF CHANGED SINCE CERTIFICATION — stale")
@@ -131,11 +140,15 @@ Extract from `state.json`:
 Now compute current hashes:
 
 ```bash
-# Diff hash — has the code changed since approval?
-CURRENT_DIFF_HASH=$(git diff --stat | sha256sum | awk '{print $1}')
-
-# Staged changes too
-CURRENT_DIFF_HASH="$CURRENT_DIFF_HASH$(git diff --cached --stat | sha256sum | awk '{print $1}')"
+# Diff hash — has the code changed since approval? This hashes full diff
+# content, not diff-stat metadata.
+CURRENT_DIFF_HASH=$(python3 - <<'PY'
+import hashlib, subprocess
+u = subprocess.run(["git", "diff", "--binary", "--full-index"], capture_output=True).stdout
+s = subprocess.run(["git", "diff", "--cached", "--binary", "--full-index"], capture_output=True).stdout
+print(hashlib.sha256(u + b"\0PRFORGE-STAGED\0" + s).hexdigest())
+PY
+)
 
 # Validation ledger hash
 CURRENT_VAL_HASH=$(sha256sum "$ARTIFACT_DIR/validation_ledger.md" | awk '{print $1}')
