@@ -57,6 +57,10 @@ PLAN_ALLOWED_WRITE_PREFIXES = [
 def load_json(path: Path) -> dict:
     if not path.exists():
         return {}
+    try:
+        return json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return {}
 
 
 def artifact_dir_for_worktree(wt_path: Path) -> Path:
@@ -81,10 +85,6 @@ def repo_relative_path(file_path: str, wt_path: Path) -> str:
     except ValueError:
         return ""
     return normalize_path_for_lease(file_path)
-    try:
-        return json.loads(path.read_text())
-    except (json.JSONDecodeError, OSError):
-        return {}
 
 
 def normalized_config(config: dict) -> dict:

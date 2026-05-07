@@ -30,6 +30,7 @@ if "redis" not in sys.modules:
     sys.modules["redis"] = fake_redis_module
 
 import redis_backend as rb  # noqa: E402
+import coordinator  # noqa: E402
 
 
 class RedisDown(Exception):
@@ -168,7 +169,9 @@ class FakeRedis:
             if data.get("worker_id") == argv[0] and data.get("job_id") == argv[1]:
                 return self.expire(keys[0], int(argv[2]))
             return 0
-        if "DELETE', KEYS[1]" in script or "DEL', KEYS[1]" in script:
+        if "DELETE', KEYS[1]" in script:
+            raise AssertionError("lua release used invalid Redis DELETE command")
+        if "DEL', KEYS[1]" in script:
             current = self.get(keys[0])
             if not current:
                 return 1
@@ -229,6 +232,20 @@ def test_path_lock_renewal_and_wrong_owner_failure() -> None:
     assert rb.renew_path_locks(r, [key], "worker-b", "job-1", 60) == [key]
 
 
+def test_release_path_locks_uses_valid_redis_del() -> None:
+    r = FakeRedis()
+    assert rb.acquire_path_locks_atomic(r, "c", "org_repo", "worker-a", "job-1", ["src/a.py"], 60)[0]
+    key = rb.lease_path("c", "org_repo", "src/a.py")
+    assert rb.release_path_locks(r, [key], "worker-a", "job-1") == []
+    assert rb.get_lease(r, key) is None
+
+
+def test_readonly_advisory_jobs_do_not_require_mutating_mode() -> None:
+    assert coordinator._mode_allowed("same_file_review_assist", []) is True
+    assert coordinator._mode_allowed("review_response", []) is False
+    assert coordinator._mode_allowed("review_response", ["review_response"]) is True
+
+
 def test_redis_outage_raises_instead_of_silent_success() -> None:
     r = FakeRedis()
     r.down = True
@@ -245,6 +262,8 @@ def main() -> int:
         test_lease_expiry_allows_reassignment,
         test_worker_crash_release_is_owner_checked,
         test_path_lock_renewal_and_wrong_owner_failure,
+        test_release_path_locks_uses_valid_redis_del,
+        test_readonly_advisory_jobs_do_not_require_mutating_mode,
         test_redis_outage_raises_instead_of_silent_success,
     ]
     for test in tests:

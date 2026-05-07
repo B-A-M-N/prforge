@@ -318,10 +318,13 @@ import os
 import sys
 from pathlib import Path
 sys.path.insert(0, "$ROOT/scripts/mesh")
-from mesh_lock_guard import normalized_config
+from mesh_lock_guard import normalized_config, load_json
 from mesh_lock_guard import repo_relative_path, artifact_dir_for_worktree
 flat = {"mode": "local", "worker_id": "w1", "redis": {"url": "redis://x"}, "cluster": "c"}
 nested = {"mesh": {"node_id": "w2", "redis_url": "redis://y", "cluster_name": "d"}}
+config_path = Path("$TMP/mesh-config.json")
+config_path.write_text(json.dumps(flat))
+assert load_json(config_path)["worker_id"] == "w1"
 os.environ["PRFORGE_MESH_MODE"] = "lan"
 assert normalized_config(flat)["worker_id"] == "w1"
 assert normalized_config(nested)["worker_id"] == "w2"
@@ -333,3 +336,23 @@ assert artifact_dir_for_worktree(wt) == Path("$TMP/artifacts")
 assert repo_relative_path(str(wt / "src" / "x.py"), wt) == "src/x.py"
 PY
 pass "mesh lock guard accepts config variants and repo pointer paths"
+
+cat > "$TMP/mesh-off-config.json" <<'JSON'
+{"mode": "off", "worker_id": "w1"}
+JSON
+MESH_JSON="$(
+  python3 - <<PY
+import json
+print(json.dumps({"tool_name": "Edit", "tool_input": {"file_path": "$REPO/a.txt"}}))
+PY
+)"
+if ! printf '%s' "$MESH_JSON" | \
+  HOME="$TMP/no-home-scan" \
+  PRFORGE_MESH_CONFIG="$TMP/mesh-off-config.json" \
+  PRFORGE_WORKER_ID="w1" \
+  CLAUDE_PLUGIN_ROOT="" \
+  bash "$ROOT/hooks/mesh-lock-guard.sh" >"$TMP/mesh-hook.out" 2>"$TMP/mesh-hook.err"; then
+  cat "$TMP/mesh-hook.err" >&2 || true
+  fail "mesh lock guard failed without CLAUDE_PLUGIN_ROOT"
+fi
+pass "mesh hook resolves guard without plugin root or home scan"

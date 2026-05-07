@@ -615,7 +615,7 @@ local current = redis.call('GET', KEYS[1])
 if not current then return 1 end
 local decoded = cjson.decode(current)
 if decoded.worker_id == ARGV[1] and decoded.job_id == ARGV[2] then
-  return redis.call('DELETE', KEYS[1])
+  return redis.call('DEL', KEYS[1])
 end
 return 0
 """

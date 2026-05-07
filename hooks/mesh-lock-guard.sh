@@ -119,10 +119,13 @@ esac
 # ---------------------------------------------------------------------------
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-}"
 MESH_SCRIPTS=""
-if [[ -z "$PLUGIN_ROOT" ]]; then
-  MESH_SCRIPTS=$(find "$HOME" -path "*/prforge/scripts/mesh" -type d 2>/dev/null | head -1)
-else
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
+if [[ -n "$HOOK_DIR" && -d "$HOOK_DIR/../scripts/mesh" ]]; then
+  MESH_SCRIPTS="$(cd "$HOOK_DIR/../scripts/mesh" 2>/dev/null && pwd)"
+elif [[ -n "$PLUGIN_ROOT" && -d "$PLUGIN_ROOT/scripts/mesh" ]]; then
   MESH_SCRIPTS="$PLUGIN_ROOT/scripts/mesh"
+elif [[ "${PRFORGE_MESH_ALLOW_HOME_SCAN:-0}" == "1" ]]; then
+  MESH_SCRIPTS=$(find "$HOME" -maxdepth 5 -path "*/prforge/scripts/mesh" -type d 2>/dev/null | head -1)
 fi
 
 if [[ -z "$MESH_SCRIPTS" || ! -d "$MESH_SCRIPTS" ]]; then
@@ -140,6 +143,13 @@ fi
 # ---------------------------------------------------------------------------
 # Delegate to Python guard for all JSON/Redis/phase logic
 # ---------------------------------------------------------------------------
+if command -v timeout >/dev/null 2>&1; then
+  echo "$HOOK_JSON" | timeout "${PRFORGE_MESH_GUARD_TIMEOUT:-5s}" python3 "$GUARD_SCRIPT" \
+    --config "$CONFIG_PATH" \
+    --worker-id "$PRFORGE_WORKER_ID"
+  exit $?
+fi
+
 echo "$HOOK_JSON" | python3 "$GUARD_SCRIPT" \
   --config "$CONFIG_PATH" \
   --worker-id "$PRFORGE_WORKER_ID"
