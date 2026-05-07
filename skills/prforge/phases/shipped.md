@@ -1,17 +1,21 @@
-# Phase 9: SHIPPED
+# Legacy Playbook: SHIPPED
 
-Read this file at the START of SHIPPED after user gives explicit approval.
+> LEGACY — recovery only. Canonical terminal phase is COMPLETE with outcome field.
+
+Do not enter `SHIPPED` as a canonical state. Current PRForge advances from
+APPROVAL to POSTMORTEM after approved actions complete, records the terminal
+result in `state.outcome`, continues to MEMORY_INDEX, and finishes at COMPLETE.
 
 ---
 
 ## Idempotency Guard
 
-**Before executing any shipping action**, verify all of the following from `.prforge/state.json`:
+**Legacy playbook. Current canonical flow executes approved public actions from APPROVAL and then moves to POSTMORTEM. If this file is used for legacy recovery, verify all of the following from `$ARTIFACT_DIR/state.json`:**
 
 - [ ] `state.phase == "APPROVAL"` or `state.phase == "SHIPPED_PENDING"`
 - [ ] `state.approval.approved == true`
 - [ ] `state.approval.approval_id` exists and is non-empty
-- [ ] `state.approval.consumed != true` — if `consumed == true`, **stop immediately** and report what was already shipped via `.prforge/shipping_ledger.json`
+- [ ] `state.approval.consumed != true` — if `consumed == true`, **stop immediately** and report what was already shipped via `$ARTIFACT_DIR/shipping_ledger.json`
 - [ ] `state.approval.diff_hash` matches current diff:
   ```bash
   git diff --stat 2>/dev/null | sha256sum | awk '{print $1}'
@@ -19,16 +23,17 @@ Read this file at the START of SHIPPED after user gives explicit approval.
   ```
 - [ ] `state.approval.validation_hash` matches current validation ledger:
   ```bash
-  sha256sum .prforge/validation_ledger.md | awk '{print $1}'
+  sha256sum "$ARTIFACT_DIR/validation_ledger.md" | awk '{print $1}'
   # must equal state.approval.validation_hash
   ```
 - [ ] `state.release.suggested_actions` exists and is non-empty
-- [ ] `.prforge/` is not tracked or staged:
+- [ ] PRForge runtime artifacts are not tracked or staged:
   ```bash
-  git ls-files .prforge/          # must return empty
-  git status --short -- .prforge/ # must return empty
+  git ls-files .prforge .prforge-run          # must return empty
+  git status --short -- .prforge .prforge-run # must return empty
   ```
-  If either returns output: **hard stop**. Run `git reset HEAD .prforge/` and `git rm --cached -r .prforge/` to clean, then re-verify before proceeding. Do not push with `.prforge/` in the index under any circumstances.
+  If either returns output: **hard stop**. Move to BLOCKED and ask the user before
+  unstaging or removing tracked runtime artifacts. Do not run destructive cleanup by default.
 
 If any hash mismatches: diff or validation changed after approval. **Hard block** — return to PACKAGE, regenerate approval, get fresh approval before proceeding.
 
@@ -44,7 +49,7 @@ The `/pr-approve` command verifies integrity and dispatches execution. Follow it
 
 ## Shipping Ledger
 
-After each successful public action, append to `.prforge/shipping_ledger.json` (create if absent; append to array if exists — never overwrite):
+After each successful public action, append to `$ARTIFACT_DIR/shipping_ledger.json` (create if absent; append to array if exists — never overwrite):
 
 ```json
 {
@@ -61,11 +66,14 @@ After each successful public action, append to `.prforge/shipping_ledger.json` (
 
 ## Completion
 
-After all approved actions complete, update state:
+After all approved actions complete, update state through the canonical path:
 
 ```json
-{ "phase": "SHIPPED", "approval": { "consumed": true } }
+{ "phase": "POSTMORTEM", "outcome": "MERGED|CLOSED|ABANDONED|REVERTED", "approval": { "consumed": true } }
 ```
+
+Continue to MEMORY_INDEX, then COMPLETE. Do not set `phase` to `SHIPPED` — that state
+no longer exists in the canonical machine.
 
 Confirm to the user what was done:
 - "Pushed to `origin/fix-branch-name`"
