@@ -151,6 +151,20 @@ def is_plan_allowed_write(file_path: str) -> bool:
     return any(rel.startswith(prefix) for prefix in PLAN_ALLOWED_WRITE_PREFIXES)
 
 
+def path_is_covered_by_lease(rel_path: str, path_leases: list[dict]) -> bool:
+    """Return true only when rel_path is exactly leased or under a leased directory."""
+    rel = normalize_path_for_lease(rel_path)
+    if not rel:
+        return False
+    for lease in path_leases:
+        leased = normalize_path_for_lease(str(lease.get("path", ""))).rstrip("/")
+        if not leased:
+            continue
+        if rel == leased or rel.startswith(f"{leased}/"):
+            return True
+    return False
+
+
 def main():
     parser = argparse.ArgumentParser(description="PRForge Mesh Lock Guard")
     parser.add_argument("--config", required=True, help="Path to mesh config JSON")
@@ -305,22 +319,16 @@ def main():
                 # Check path leases (after PLAN / during IMPLEMENT)
                 locks_path = artifact_dir / "locks.json"
                 locks = load_json(locks_path)
-                if locks.get("leases", {}).get("paths"):
-                    path_leases = locks["leases"]["paths"]
-                    covered = any(
-                        normalize_path_for_lease(pl.get("path", "")) in rel
-                        or rel in normalize_path_for_lease(pl.get("path", ""))
-                        for pl in path_leases
-                    )
-                    if not covered and allowed:
-                        in_allowed = any(
-                            rel.startswith(ap) or ap in rel
-                            for ap in allowed
-                        )
-                        if not in_allowed:
-                            print(f"⛔ PRFORGE MESH BLOCK: Path not in leased scope: {rel}", file=sys.stderr)
-                            print(f"   Allowed paths: {allowed}", file=sys.stderr)
-                            sys.exit(1)
+                path_leases = locks.get("leases", {}).get("paths") or []
+                if current_phase not in PLAN_PHASES:
+                    if not path_leases:
+                        print(f"⛔ PRFORGE MESH BLOCK: No coordinator-certified path leases for write: {rel}", file=sys.stderr)
+                        print("   Complete PLAN and wait for IMPLEMENT certification before source edits.", file=sys.stderr)
+                        sys.exit(1)
+                    if not path_is_covered_by_lease(rel, path_leases):
+                        print(f"⛔ PRFORGE MESH BLOCK: Path not in leased scope: {rel}", file=sys.stderr)
+                        print(f"   Leased paths: {[pl.get('path', '') for pl in path_leases]}", file=sys.stderr)
+                        sys.exit(1)
 
     # For Bash, block dangerous operations outside worktree
     if tool_name == "Bash":

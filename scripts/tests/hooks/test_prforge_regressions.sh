@@ -348,6 +348,7 @@ from pathlib import Path
 sys.path.insert(0, "$ROOT/scripts/mesh")
 from mesh_lock_guard import normalized_config, load_json
 from mesh_lock_guard import repo_relative_path, artifact_dir_for_worktree
+from mesh_lock_guard import path_is_covered_by_lease
 flat = {"mode": "local", "worker_id": "w1", "redis": {"url": "redis://x"}, "cluster": "c"}
 nested = {"mesh": {"node_id": "w2", "redis_url": "redis://y", "cluster_name": "d"}}
 config_path = Path("$TMP/mesh-config.json")
@@ -362,6 +363,11 @@ wt = Path("$REPO")
 (wt / ".prforge-run").write_text("artifact_dir=$TMP/artifacts\n")
 assert artifact_dir_for_worktree(wt) == Path("$TMP/artifacts")
 assert repo_relative_path(str(wt / "src" / "x.py"), wt) == "src/x.py"
+leases = [{"path": "src/locked.py"}, {"path": "pkg"}]
+assert path_is_covered_by_lease("src/locked.py", leases)
+assert path_is_covered_by_lease("pkg/module.py", leases)
+assert not path_is_covered_by_lease("src/locked.py.bak", leases)
+assert not path_is_covered_by_lease("src/unlocked.py", leases)
 PY
 pass "mesh lock guard accepts config variants and repo pointer paths"
 
