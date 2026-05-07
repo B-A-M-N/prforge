@@ -18,6 +18,33 @@ PRForge supports two distributed scaling models:
 - Single machine handles coordination and execution
 - No network dependencies, simpler setup
 
+## Terminology
+
+```
+User command: /pr-distributed-local  →  Internal mode: "local"  (vertical, single machine)
+User command: /pr-distributed        →  Internal mode: "lan"    (horizontal, multi-machine)
+```
+
+There is **no** internal mode named `"distributed"`. Only `local` and `lan`.
+
+## Hook Config Resolution
+
+The mesh lock guard hook (`hooks/mesh-lock-guard.sh`) resolves config in this order:
+
+1. `PRFORGE_MESH_CONFIG` env var (explicit, set by worker launch)
+2. Mode-specific default (`PRFORGE_MESH_MODE=local` → `~/.prforge-mesh/config.json`)
+3. LAN glob fallback (`~/.prforge-mesh/lan/*/config.json`, only if exactly one match)
+4. Fail-closed: active worker + ambiguous/broken config = block
+
+Workers must export these env vars on launch:
+```bash
+export PRFORGE_MESH_ACTIVE=1
+export PRFORGE_MESH_MODE=local        # or "lan"
+export PRFORGE_MESH_CONFIG="/absolute/path/to/config.json"
+export PRFORGE_WORKER_ID="worker-a"
+export PRFORGE_JOB_ID=""              # populated when assigned
+```
+
 ## Worktree Isolation (Both Models)
 
 **Core rule: Never run multiple agents in the same repo checkout.**
@@ -76,6 +103,122 @@ Path locks are acquired **after PLAN** using `scope.json` allowed_paths. All-or-
 
 **Core invariant:** A worker may only mutate source files when it owns the job lease, target lease, branch lease, is inside its assigned worktree, and (after PLAN) owns path leases for the files it edits.
 
+## Same-File Write Lock Policy
+
+**Rule: A source file may have only one active write owner.**
+
+1. A source file may have only one active write owner.
+2. PLAN is free — any worker may plan against any file.
+3. IMPLEMENT requires coordinator-certified path locks.
+4. Same-file collisions produce an explicit `same_file_review_assist` job.
+5. Hunk-level or symbol-level parallelism is **forbidden**.
+6. Automatic merge of same-file worker patches is **forbidden**.
+7. Same-file integration requires an explicit integration job with full re-validation.
+
+### PLAN → IMPLEMENT Lifecycle
+
+```
+PLAN job dispatched to worker
+  → worker reads, analyzes, plans (read-only)
+  → worker produces: scope.json, patch_plan.md, declared_write_set
+  → worker writes plan_ready to outbox/status.json
+  → coordinator reads declared_write_set
+  → coordinator atomically acquires path locks (Redis Lua, all-or-nothing)
+  → on success: coordinator certifies IMPLEMENT (path leases held)
+  → on failure: coordinator creates same_file_review_assist job
+  → worker may NOT self-transition PLAN → IMPLEMENT
+```
+
+**Core invariant:**
+> No worker may self-promote from PLAN to IMPLEMENT. Only the coordinator can issue IMPLEMENT authority. IMPLEMENT authority requires live ownership of: job lease, target lease, branch lease, declared path leases, assigned worktree.
+
+### PLAN Phase Write Restrictions
+
+During PLAN, the lock guard enforces:
+
+**Allowed:**
+- Read, Grep, Glob
+- Bash read-only inspection (git status/log/diff/show, ls, cat, rg, find)
+- Write `.prforge/scope.json`, `.prforge/patch_plan.md`, `.prforge/contract.md`, `.prforge/state.json`
+
+**Forbidden:**
+- Source file edits
+- git commit, checkout, reset, clean
+- Package manager installs that mutate lockfiles
+- Formatters that rewrite source
+
+### `declared_write_set` vs `allowed_paths`
+
+```json
+{
+  "constraints": {
+    "allowed_paths": ["src/foo.ts", "src/bar.ts", "tests/"],
+    "declared_write_set": ["src/foo.ts"]
+  }
+}
+```
+
+- `allowed_paths`: files the worker may read/touch.
+- `declared_write_set`: files the worker will **mutate**. Only this drives write locks.
+
+**Expansion rules:**
+- During PLAN: directories allowed in `declared_write_set` (worker is still discovering).
+- Before IMPLEMENT: directories must resolve to concrete file paths. Coordinator blocks IMPLEMENT if any entry is still a directory.
+- This prevents one worker from locking `src/` and starving the whole repo.
+
+### Same-File Review Assist Jobs
+
+When a path lock conflict is detected, the coordinator creates an explicit `same_file_review_assist` job:
+
+```json
+{
+  "type": "same_file_review_assist",
+  "blocked_job_id": "job-b",
+  "owner_job_id": "job-a",
+  "owner_worker_id": "worker-a",
+  "locked_paths": ["src/foo.ts"],
+  "owner_artifact_dir": "~/.prforge-mesh/artifacts/default/job-a/",
+  "mode": "read_only"
+}
+```
+
+The advisory worker:
+- Reads owner's artifacts from `owner_artifact_dir`
+- Produces advisory files in own artifact dir:
+  - `advisory-review.md`
+  - `advisory-risk-notes.md`
+  - `advisory-test-suggestions.md`
+- Does NOT edit, commit, or push locked files
+
+**De-dup**: one advisory job per (blocked_job_id, owner_job_id, lock-set-hash).
+
+### Integration Flow (When Both Agents' Work Is Needed)
+
+1. Worker A produces patch A
+2. Worker B produces advisory/review notes
+3. Coordinator creates explicit integration job
+4. Integration worker starts from clean base + patch A
+5. Integration worker evaluates patch B's advisory
+6. Full validation + hostile review + approval regeneration
+
+**Bad:** Git merged both patches cleanly, ship it.
+**Good:** Integration worker reviewed intent, design, diff, tests, and accepted specific changes.
+
+### Artifact Path Convention
+
+```
+~/.prforge-mesh/artifacts/<cluster>/<job_id>/
+  contract.md
+  patch_plan.md
+  scope.json
+  validation_ledger.md
+  current_diff.patch
+  advisory/
+    <worker-id>-review.md
+    <worker-id>-risk-notes.md
+    <worker-id>-test-suggestions.md
+```
+
 ## Stale Worker Handling
 
 ```
@@ -126,7 +269,7 @@ The `mesh-lock-guard.sh` hook reads these to enforce boundaries.
 
 ## .prforge artifact exclusion (ALL artifacts)
 
-The following are NEVER staged or committed (enforced by `.gitignore`, `.git/info/exclude`, and pre-commit hook):
+The following are NEVER staged or committed (enforced by `.git/info/exclude` and pre-commit hook):
 
 - `.prforge/state.json`, `approval.md`, `dod.md`, `hostile_review.md`, `validation_ledger.md`
 - `.prforge/inbox/job.json`
@@ -165,6 +308,8 @@ from a different job_id. Warn the user and stop.
 | `pr_polish` | `modes/pr_polish.md` |
 | `ci_fix_related_to_branch` | `modes/new_pr.md` + CI-fix constraint |
 | `audit_only` | `modes/audit_only.md` (Scenario B — proactive scan) |
+| `same_file_review_assist` | Read-only advisory job — produce review/risk/test notes for locked paths |
+| `integration` | Integration job — merge patches from multiple workers with full re-validation |
 
 `audit_only` Scenario A (worker submission review) is triggered by the `worker_submission_ready`
 monitor event on coordinator/auditor nodes — not by a job type in the inbox.

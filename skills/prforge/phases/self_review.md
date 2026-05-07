@@ -82,7 +82,7 @@ If any `.prforge/` files are staged or tracked:
 - If tracked, add to `.git/info/exclude` and remove from index
 - Block approval until clean
 
-Nothing screams "AI harness accident" like committing `.prforge/state.json`.
+Committing `.prforge/state.json` or `$ARTIFACT_DIR/state.json` as repo content is a hard artifact-exclusion failure.
 
 Record in `state.json` under `artifact_exclusion`.
 

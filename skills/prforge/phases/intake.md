@@ -24,9 +24,17 @@ fi
 ```
 Silent and safe — only installs if no hook already exists at that path.
 
-**Verify git identity is configured and write to `state.json`:**
+**Resolve `$ARTIFACT_DIR`, then verify git identity and write to `state.json`:**
+```bash
+REPO_ROOT=$(git rev-parse --show-toplevel)
+ARTIFACT_DIR=$(awk -F= '$1=="artifact_dir"{print $2}' "$REPO_ROOT/.prforge-run" 2>/dev/null | tail -1)
+test -n "$ARTIFACT_DIR"
+export ARTIFACT_DIR
+```
+
 ```python
 import subprocess, json
+from pathlib import Path
 
 git_name = subprocess.check_output(['git', 'config', 'user.name'], text=True).strip()
 git_email = subprocess.check_output(['git', 'config', 'user.email'], text=True).strip()
@@ -36,13 +44,14 @@ if not git_name or not git_email:
     print("Set with: git config --global user.name 'YourName'")
     print("          git config --global user.email 'your@email'")
 
-state = json.load(open('.prforge/state.json'))
+state_path = Path(__import__('os').environ['ARTIFACT_DIR']) / 'state.json'
+state = json.load(open(state_path))
 state['git_identity'] = {
     'name': git_name,
     'email': git_email,
     'configured': bool(git_name and git_email)
 }
-open('.prforge/state.json', 'w').write(json.dumps(state, indent=2))
+open(state_path, 'w').write(json.dumps(state, indent=2))
 ```
 
 **CRITICAL: `git_identity` is the ONLY source of truth for commit authorship.**
@@ -55,22 +64,26 @@ open('.prforge/state.json', 'w').write(json.dumps(state, indent=2))
 
 **Permanently exclude `.prforge/` from git — MUST be the first git operation on any activation:**
 ```bash
-# Always write to .git/info/exclude (no repo modification required)
+# Only use .git/info/exclude — never modify .gitignore for PRForge artifacts.
+# .gitignore modifications are tracked changes that get pushed upstream.
+# .git/info/exclude is local-only and never committed.
 EXCLUDE_FILE="$REPO_ROOT/.git/info/exclude"
 if ! grep -qF ".prforge/" "$EXCLUDE_FILE" 2>/dev/null; then
   echo ".prforge/" >> "$EXCLUDE_FILE"
 fi
-
-# Also add to .gitignore if one exists in the repo root
-if [[ -f "$REPO_ROOT/.gitignore" ]]; then
-  if ! grep -qF ".prforge/" "$REPO_ROOT/.gitignore"; then
-    echo ".prforge/" >> "$REPO_ROOT/.gitignore"
-  fi
+if ! grep -qF ".prforge-run" "$EXCLUDE_FILE" 2>/dev/null; then
+  echo ".prforge-run" >> "$EXCLUDE_FILE"
+fi
+if ! grep -qF ".prforge-*" "$EXCLUDE_FILE" 2>/dev/null; then
+  echo ".prforge-*" >> "$EXCLUDE_FILE"
 fi
 ```
 This is not optional. Run it before touching any other file. If `.prforge/` ever
 appears in `git status` output as tracked or staged, it is a hard stop — remove it
 from the index immediately before doing anything else.
+
+**NEVER modify `.gitignore`** to add PRForge patterns. That creates a tracked change
+that would be pushed upstream, advertising the use of an AI harness to the repo.
 
 Before any edits, run and record:
 
@@ -82,12 +95,12 @@ git log --oneline --decorate -8
 git diff --stat
 ```
 
-Save to `.prforge/snapshots/preflight.patch`.
+Save to `$ARTIFACT_DIR/snapshots/preflight.patch`.
 
 If dirty tree exists, classify:
 - **User changes** — uncommitted work that isn't part of this PR. Stash or warn.
 - **Existing PR changes** — previous PRForge work. Safe to build on.
-- **Generated artifacts** — `.prforge/` files. Safe.
+- **Generated artifacts** — files under `$ARTIFACT_DIR`. Safe.
 - **Unknown** — stop and ask the user before proceeding.
 
 ---
@@ -100,7 +113,7 @@ If dirty tree exists, classify:
 GITHUB_USER=$(gh api user --jq '.login' 2>/dev/null || echo "unknown")
 ```
 
-Record `github_user` in `state.json` and `task.json`. This is used throughout the
+Record `github_user` in `$ARTIFACT_DIR/state.json` and `$ARTIFACT_DIR/task.json`. This is used throughout the
 run to determine ownership and to enforce the no-coauthor rule.
 
 ### Step 2: Normalize the task

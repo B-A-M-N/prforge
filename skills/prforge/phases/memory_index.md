@@ -5,7 +5,7 @@ This phase runs after POSTMORTEM to index learnings into the memory ledger and r
 
 ## Preconditions
 - POSTMORTEM phase is complete
-- `postmortem.json` exists in `.prforge/runs/<run_id>/`
+- `postmortem.json` exists in `$ARTIFACT_DIR`
 - Phase is triggered only after postmortem generation
 
 ## Steps
@@ -14,7 +14,7 @@ This phase runs after POSTMORTEM to index learnings into the memory ledger and r
 Load the generated postmortem file:
 
 ```bash
-cat .prforge/runs/<run_id>/postmortem.json
+cat "$ARTIFACT_DIR/postmortem.json"
 ```
 
 Verify it conforms to `schemas/postmortem-schema.json`.
@@ -24,8 +24,8 @@ Execute the memory indexer:
 
 ```bash
 python3 $PRFORGE_HOME/scripts/memory_indexer.py index \
-  --postmortem .prforge/runs/<run_id>/postmortem.json \
-  --run-dir .prforge/runs/<run_id>
+  --postmortem "$ARTIFACT_DIR/postmortem.json" \
+  --run-dir "$ARTIFACT_DIR"
 ```
 
 The indexer will:

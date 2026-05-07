@@ -18,7 +18,7 @@ Before generating the approval, compute the overall readiness status:
 - `artifact_exclusion.clean == false`
 - `blast_radius.tests_found_count == 0` AND `blast_radius.changed_files_count > 0` (no tests for changed files)
 - Any changed source file has a test file that was NOT updated (stale tests)
-- `.prforge/dod.md` has any unchecked item that is not an optional suggestion
+- `$ARTIFACT_DIR/dod.md` has any unchecked item that is not an optional suggestion
 
 **`READY_WITH_WARNINGS`** if any of:
 - `ci_status.overall` is `ci_failed_related` or `ci_pending`
@@ -46,7 +46,7 @@ cannot present as "ready to ship."
 
 ## Step 2: Generate approval.md
 
-Write `.prforge/approval.md` using the template from `references/approval.md`.
+Write `$ARTIFACT_DIR/approval.md` using the template from `references/approval.md`.
 
 Fill in every section. Do not leave placeholders.
 
@@ -66,11 +66,16 @@ Fill in every section. Do not leave placeholders.
 Before presenting the approval, compute and record hashes:
 
 ```bash
-DIFF_HASH=$(git diff --stat 2>/dev/null | sha256sum | awk '{print $1}')
-DIFF_HASH="$DIFF_HASH$(git diff --cached --stat 2>/dev/null | sha256sum | awk '{print $1}')"
-VAL_HASH=$(sha256sum .prforge/validation_ledger.md | awk '{print $1}')
-APPROVAL_HASH=$(sha256sum .prforge/approval.md | awk '{print $1}')
-DOD_HASH=$(sha256sum .prforge/dod.md | awk '{print $1}')
+DIFF_HASH=$(python3 - <<'PY'
+import hashlib, subprocess
+u = subprocess.run(["git", "diff", "--binary", "--full-index"], capture_output=True).stdout
+s = subprocess.run(["git", "diff", "--cached", "--binary", "--full-index"], capture_output=True).stdout
+print(hashlib.sha256(u + b"\0PRFORGE-STAGED\0" + s).hexdigest())
+PY
+)
+VAL_HASH=$(sha256sum "$ARTIFACT_DIR/validation_ledger.md" | awk '{print $1}')
+APPROVAL_HASH=$(sha256sum "$ARTIFACT_DIR/approval.md" | awk '{print $1}')
+DOD_HASH=$(sha256sum "$ARTIFACT_DIR/dod.md" | awk '{print $1}')
 ```
 
 ## Step 4: Record approval in state.json

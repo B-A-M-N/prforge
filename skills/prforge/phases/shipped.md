@@ -6,7 +6,7 @@ Read this file at the START of SHIPPED after user gives explicit approval.
 
 ## Idempotency Guard
 
-**Before executing any shipping action**, verify all of the following from `.prforge/state.json`:
+**Legacy playbook. Current canonical flow executes approved public actions from APPROVAL and then moves to POSTMORTEM. If this file is used for legacy recovery, verify all of the following from `$ARTIFACT_DIR/state.json`:**
 
 - [ ] `state.phase == "APPROVAL"` or `state.phase == "SHIPPED_PENDING"`
 - [ ] `state.approval.approved == true`
@@ -19,7 +19,7 @@ Read this file at the START of SHIPPED after user gives explicit approval.
   ```
 - [ ] `state.approval.validation_hash` matches current validation ledger:
   ```bash
-  sha256sum .prforge/validation_ledger.md | awk '{print $1}'
+  sha256sum "$ARTIFACT_DIR/validation_ledger.md" | awk '{print $1}'
   # must equal state.approval.validation_hash
   ```
 - [ ] `state.release.suggested_actions` exists and is non-empty

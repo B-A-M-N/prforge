@@ -1,0 +1,46 @@
+{
+  "id": "pm-test-001",
+  "run_id": "test-run-123",
+  "repo": "myorg/myrepo",
+  "pr_number": 42,
+  "outcome": "success",
+  "confidence": "high",
+  "summary": {
+    "what_was_done": [
+      "Implemented retry logic for flaky network calls",
+      "Added circuit breaker pattern"
+    ],
+    "what_worked": [
+      {
+        "text": "Circuit breaker prevented cascade failure",
+        "type": "what_worked",
+        "evidence": ["e36307b820517432"]
+      },
+      {
+        "text": "Retry logic reduced error rate from 15% to 2%",
+        "type": "what_worked",
+        "evidence": []
+      }
+    ],
+    "could_be_better": [
+      "Should have implemented retries earlier in the development cycle"
+    ],
+    "avoid_next_time": [
+      "Avoid deploying retry logic without proper load testing"
+    ],
+    "maintainer_preferences": [
+      "All new services must include circuit breaker configuration"
+    ],
+    "repo_conventions": [
+      "Use standardized retry configuration pattern"
+    ]
+  },
+  "evidence": {
+    "what_worked": ["e36307b820517432"],
+    "could_be_better": [],
+    "avoid_next_time": [],
+    "maintainer_preferences": []
+  },
+  "tags": ["reliability", "circuit-breaker", "retries"],
+  "created_at": "2026-05-05T00:00:00Z"
+}

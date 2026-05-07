@@ -23,7 +23,13 @@ def connect(redis_url: Optional[str] = None) -> redis.Redis:
             "Redis URL not set. Set PRFORGE_MESH_REDIS or pass redis_url.\n"
             "Example: redis://:PASSWORD@127.0.0.1:6380/0"
         )
-    r = redis.Redis.from_url(url, decode_responses=True, socket_connect_timeout=5)
+    r = redis.Redis.from_url(
+        url,
+        decode_responses=True,
+        socket_connect_timeout=2,
+        socket_timeout=2,
+        health_check_interval=30,
+    )
     r.ping()
     return r
 
@@ -277,9 +283,8 @@ def acquire_job_leases(
     ttl: int,
 ) -> tuple[bool, list[str]]:
     """
-    Atomically acquire job, target, branch, and worker leases.
-    Returns (success, list_of_acquired_keys).
-    On failure, releases all acquired keys.
+    Atomically acquire job, target, branch, and worker leases via Redis Lua.
+    Returns (success, list_of_acquired_keys). On failure no partial locks remain.
     """
     job_id    = job["job_id"]
     repo      = job["repo"]
@@ -298,17 +303,13 @@ def acquire_job_leases(
          _lease_value(node_id, job_id, repo=repo)),
     ]
 
-    acquired = []
-    for lk, lv in leases:
-        if acquire_lease(r, lk, lv, ttl):
-            acquired.append(lk)
-        else:
-            # Rollback
-            for ak in acquired:
-                release_lease(r, ak)
-            return False, []
-
-    return True, acquired
+    keys = [lk for lk, _lv in leases]
+    args = [lv for _lk, lv in leases]
+    args.append(str(ttl))
+    result = r.eval(ACQUIRE_PATH_LOCKS_LUA, len(keys), *(keys + args))
+    if result[0] == 1:
+        return True, keys
+    return False, []
 
 
 def renew_job_leases(
@@ -320,15 +321,19 @@ def renew_job_leases(
     branch: str,
     node_id: str,
     ttl: int,
-) -> None:
+) -> list[str]:
     repo_slug = repo.replace("/", "_")
+    failed = []
     for lk in [
         lease_job(cluster, job_id),
         lease_target(cluster, repo_slug, "pr", pr),
         lease_branch(cluster, repo_slug, branch),
         lease_worker(cluster, node_id),
     ]:
-        renew_lease(r, lk, ttl)
+        result = r.eval(RENEW_LOCK_LUA, 1, lk, node_id, job_id, str(ttl))
+        if result == 0:
+            failed.append(lk)
+    return failed
 
 
 def release_job_leases(
@@ -339,15 +344,19 @@ def release_job_leases(
     pr: str,
     branch: str,
     node_id: str,
-) -> None:
+) -> list[str]:
     repo_slug = repo.replace("/", "_")
+    failed = []
     for lk in [
         lease_job(cluster, job_id),
         lease_target(cluster, repo_slug, "pr", pr),
         lease_branch(cluster, repo_slug, branch),
         lease_worker(cluster, node_id),
     ]:
-        release_lease(r, lk)
+        result = r.eval(RELEASE_LOCK_LUA, 1, lk, node_id, job_id)
+        if result == 0:
+            failed.append(lk)
+    return failed
 
 
 # ---------------------------------------------------------------------------
@@ -357,9 +366,8 @@ def release_job_leases(
 def list_all_leases(r: redis.Redis, cluster: str, prefix: str = "lease") -> list[dict]:
     """List all lease keys matching Workflow:<cluster>:<prefix>:*."""
     pattern = key(cluster, prefix, "*")
-    keys = r.keys(pattern)
     results = []
-    for k in keys:
+    for k in r.scan_iter(match=pattern, count=100):
         val = get_lease(r, k)
         if val:
             results.append({"key": k, **val})
@@ -568,6 +576,152 @@ def mesh_status(r: redis.Redis, cluster: str) -> dict:
         "pending_jobs": pending_count,
         "active_worker_jobs": active_count,
     }
+
+
+# ---------------------------------------------------------------------------
+# Lua scripts for atomic multi-key operations
+# ---------------------------------------------------------------------------
+
+ACQUIRE_PATH_LOCKS_LUA = """
+local ttl = ARGV[#ARGV]
+local acquired = {}
+for i, key in ipairs(KEYS) do
+  local ok = redis.call('SET', key, ARGV[i], 'NX', 'EX', ttl)
+  if ok then
+    table.insert(acquired, key)
+  else
+    for _, ak in ipairs(acquired) do
+      redis.call('DEL', ak)
+    end
+    local existing = redis.call('GET', key)
+    return {0, key, existing or ''}
+  end
+end
+return {1, "", ""}
+"""
+
+RENEW_LOCK_LUA = """
+local current = redis.call('GET', KEYS[1])
+if not current then return 0 end
+local decoded = cjson.decode(current)
+if decoded.worker_id == ARGV[1] and decoded.job_id == ARGV[2] then
+  return redis.call('EXPIRE', KEYS[1], ARGV[3])
+end
+return 0
+"""
+
+RELEASE_LOCK_LUA = """
+local current = redis.call('GET', KEYS[1])
+if not current then return 1 end
+local decoded = cjson.decode(current)
+if decoded.worker_id == ARGV[1] and decoded.job_id == ARGV[2] then
+  return redis.call('DELETE', KEYS[1])
+end
+return 0
+"""
+
+
+# ---------------------------------------------------------------------------
+# Atomic path lock operations
+# ---------------------------------------------------------------------------
+
+def _extract_path_from_lease_key(lease_key: str) -> str:
+    """Extract the repo-relative path from a lease key.
+
+    Key format: Workflow:<cluster>:lease:path>:<repo>:<path>
+    Returns the <path> portion with '/' restored from lease-safe encoding.
+    """
+    # Split on ':' and take everything after 'lease:path:<repo>'
+    parts = lease_key.split(":")
+    # parts[0] = Workflow, [1] = cluster, [2] = lease, [3] = path, [4] = repo, [5:] = path segments
+    if len(parts) < 6:
+        return lease_key
+    return "/".join(parts[5:])
+
+
+def acquire_path_locks_atomic(
+    r: redis.Redis,
+    cluster: str,
+    repo_slug: str,
+    worker_id: str,
+    job_id: str,
+    paths: list[str],
+    ttl: int = 300,
+) -> tuple[bool, list[dict]]:
+    """
+    All-or-nothing path lock acquisition via Redis Lua.
+    If any path fails, all acquired paths in this call are rolled back.
+    Returns (success, list_of_blocked_details).
+    """
+    normalized = sorted({
+        normalize_path_for_lease(p) for p in paths
+        if normalize_path_for_lease(p)
+    })
+    if not normalized:
+        return True, []
+
+    keys = [lease_path(cluster, repo_slug, p) for p in normalized]
+    now = _now()
+    args = [
+        json.dumps({
+            "worker_id": worker_id,
+            "job_id": job_id,
+            "path": p,
+            "lease_type": "path_write",
+            "created_at": now,
+        })
+        for p in normalized
+    ]
+    args.append(str(ttl))
+
+    result = r.eval(ACQUIRE_PATH_LOCKS_LUA, len(keys), *(keys + args))
+    # result: [1, "", ""] on success, [0, blocking_key, existing_value] on failure
+    if result[0] == 1:
+        return True, []
+
+    existing = json.loads(result[2]) if result[2] else {}
+    return False, [{
+        "path": _extract_path_from_lease_key(result[1]),
+        "owner_worker_id": existing.get("worker_id"),
+        "owner_job_id": existing.get("job_id"),
+    }]
+
+
+def renew_path_locks(
+    r: redis.Redis,
+    keys: list[str],
+    worker_id: str,
+    job_id: str,
+    ttl: int,
+) -> list[str]:
+    """
+    Renew TTL only on locks owned by this worker/job.
+    Returns list of keys that failed renewal (not owned or expired).
+    """
+    failed = []
+    for k in keys:
+        result = r.eval(RENEW_LOCK_LUA, 1, k, worker_id, job_id, str(ttl))
+        if result == 0:
+            failed.append(k)
+    return failed
+
+
+def release_path_locks(
+    r: redis.Redis,
+    keys: list[str],
+    worker_id: str,
+    job_id: str,
+) -> list[str]:
+    """
+    Release only locks owned by this worker/job.
+    Returns list of keys that failed release (not owned).
+    """
+    failed = []
+    for k in keys:
+        result = r.eval(RELEASE_LOCK_LUA, 1, k, worker_id, job_id)
+        if result == 0:
+            failed.append(k)
+    return failed
 
 
 # ---------------------------------------------------------------------------

@@ -32,34 +32,26 @@ repo-local state is forbidden because tools may follow or stage it.
 Committing `state.json` or any other `.prforge/` file is a hard error. It exposes
 internal harness state to the public repo and signals the AI nature of the workflow.
 
-## Gitignore Setup (MUST run first on every activation)
+## Git Exclusion Setup (MUST run first on every activation)
 
 **This is the FIRST git operation on any activation.** Run before touching any other file:
 
 ```bash
-# Always write to .git/info/exclude (no repo modification required)
+# Only use .git/info/exclude — NEVER modify .gitignore for PRForge artifacts.
+# .gitignore modifications are tracked changes that get pushed upstream.
+# .git/info/exclude is local-only and never committed.
 EXCLUDE_FILE="$REPO_ROOT/.git/info/exclude"
 for pat in ".prforge/" ".prforge-run" ".prforge-*"; do
   if ! grep -qxF "$pat" "$EXCLUDE_FILE" 2>/dev/null; then
     echo "$pat" >> "$EXCLUDE_FILE"
   fi
 done
-
-# Also add to .gitignore if one exists in the repo root
-if [[ -f "$REPO_ROOT/.gitignore" ]]; then
-  for pat in ".prforge/" ".prforge-run" ".prforge-*"; do
-    if ! grep -qxF "$pat" "$REPO_ROOT/.gitignore"; then
-      echo "$pat" >> "$REPO_ROOT/.gitignore"
-    fi
-  done
-fi
 ```
 
 `.git/info/exclude` is a local-only exclusion — it does not modify the repo's tracked files.
-Adding PRForge patterns there ensures git treats pointers and legacy artifacts as ignored
-without touching `.gitignore`.
 
-Adding to `.gitignore` as well provides defense-in-depth if the repo is shared.
+**NEVER modify `.gitignore`** to add PRForge patterns. That creates a tracked change
+that would be pushed upstream, advertising the use of an AI harness to the repo.
 
 ## Guard #4: Artifact Exclusion Verification (run at SELF_REVIEW)
 

@@ -229,7 +229,7 @@ def cmd_index(args):
     existing_artifact_ids = {row[0] for row in artifact_rows}
 
     # Extract summary arrays
-    summary = get_postmortem_summary(json.dumps(postmortem_data.get("summary", {})))
+    summary = get_postmortem_summary(json.dumps(postmortem_data))
 
     memory_count = 0
     lessons_processed = 0

@@ -17,7 +17,7 @@ Confirm that `state.json` has the required fields:
 - `repo` — repository identifier
 
 ### 2. Read Artifacts
-The following artifacts should be read from `.prforge/runs/<run_id>/`:
+The following artifacts should be read from `$ARTIFACT_DIR`:
 - `state.json` — current run state and metadata
 - `github/pr.json` — PR details from GitHub API
 - `review-comments.jsonl` — review comments stream
@@ -33,8 +33,8 @@ Execute the postmortem generator:
 
 ```bash
 python3 $PRFORGE_HOME/scripts/postmortem_generator.py generate \
-  --run-dir .prforge/runs/<run_id> \
-  --output .prforge/runs/<run_id>/postmortem.json
+  --run-dir "$ARTIFACT_DIR" \
+  --output "$ARTIFACT_DIR/postmortem.json"
 ```
 
 The generator will:
@@ -52,7 +52,7 @@ Update ONLY the metadata section of state (do NOT change phase):
 {
   "postmortem": {
     "generated": true,
-    "file": ".prforge/runs/<run_id>/postmortem.json",
+    "file": "$ARTIFACT_DIR/postmortem.json",
     "confidence": "<low|medium|high>",
     "generated_at": "<ISO 8601 timestamp>"
   }
@@ -68,7 +68,7 @@ Do NOT update:
 Before exiting POSTMORTEM phase, verify:
 
 - [ ] `terminal_snapshot.py` has run and outcome is set
-- [ ] All required artifacts are present in `.prforge/runs/<run_id>/`
+- [ ] All required artifacts are present in `$ARTIFACT_DIR`
 - [ ] `postmortem.json` has been generated and is valid JSON
 - [ ] `postmortem.json` conforms to `schemas/postmortem-schema.json`
 - [ ] State metadata updated with postmortem fields (generated, file, confidence)
@@ -90,4 +90,4 @@ If generation fails:
 4. Still exit POSTMORTEM phase (failure is logged but phase completes)
 
 ## Output Files
-- `.prforge/runs/<run_id>/postmortem.json` — Postmortem analysis
+- `$ARTIFACT_DIR/postmortem.json` — Postmortem analysis

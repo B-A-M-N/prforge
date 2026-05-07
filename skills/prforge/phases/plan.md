@@ -91,7 +91,7 @@ PRForge may not push, create PR, post comments, or force-push without user appro
 
 ## `dod.md` — Definition of Done (generated at PLAN time, checked at APPROVAL)
 
-After writing the contract and patch plan, generate `.prforge/dod.md`. This is a
+After writing the contract and patch plan, generate `$ARTIFACT_DIR/dod.md`. This is a
 **concrete, issue-specific checklist** — not a generic template. Every item must be
 verifiable as true or false. A weak model cannot mark this done without it actually
 being done.
@@ -139,16 +139,20 @@ Branch: [branch name]
 - [ ] User has reviewed and approved approval.md
 ```
 
-**After writing `dod.md`, immediately hash it and record in `state.json`:**
+**After writing `$ARTIFACT_DIR/dod.md`, immediately hash it and record in `$ARTIFACT_DIR/state.json`:**
 ```python
 import hashlib, json, datetime
+import os
+from pathlib import Path
 
-dod_content = open('.prforge/dod.md', 'rb').read()
+artifact_dir = Path(os.environ['ARTIFACT_DIR'])
+dod_content = open(artifact_dir / 'dod.md', 'rb').read()
 dod_hash = hashlib.sha256(dod_content).hexdigest()
 
 items_total = dod_content.decode().count('\n- [ ]') + dod_content.decode().count('\n- [x]')
 
-state = json.load(open('.prforge/state.json'))
+state_path = artifact_dir / 'state.json'
+state = json.load(open(state_path))
 state.setdefault('dod', {})
 state['dod']['generation_hash'] = dod_hash
 state['dod']['generated_at'] = datetime.datetime.utcnow().isoformat() + 'Z'
@@ -156,7 +160,7 @@ state['dod']['items_total'] = items_total
 state['dod']['items_checked'] = 0
 state['dod']['evidence_verified'] = False
 state['dod']['tampered'] = False
-open('.prforge/state.json', 'w').write(json.dumps(state, indent=2))
+open(state_path, 'w').write(json.dumps(state, indent=2))
 print(f"DoD hash recorded: {dod_hash[:16]}...")
 ```
 
