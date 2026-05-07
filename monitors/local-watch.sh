@@ -24,6 +24,25 @@
 
 set -euo pipefail
 
+MONITOR_NAME="prforge-local-watch"
+PID_DIR="${PRFORGE_MONITOR_PID_DIR:-$HOME/.prforge/monitors}"
+PID_FILE="$PID_DIR/$MONITOR_NAME.pid"
+LOCK_FILE="$PID_DIR/$MONITOR_NAME.lock"
+
+setup_monitor_lifecycle() {
+  mkdir -p "$PID_DIR" 2>/dev/null || true
+  exec 9>"$LOCK_FILE"
+  if command -v flock >/dev/null 2>&1; then
+    if ! flock -n 9; then
+      exit 0
+    fi
+  elif [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE" 2>/dev/null)" 2>/dev/null; then
+    exit 0
+  fi
+  echo "$$" > "$PID_FILE" 2>/dev/null || true
+  trap 'rm -f "$PID_FILE"; exit 0' INT TERM EXIT
+}
+
 # --- Resolve paths -----------------------------------------------------------
 REPO_ROOT=""
 ARTIFACT_DIR=""
@@ -304,13 +323,13 @@ watch_review_context() {
   [ -z "$pr_number" ] && return
 
   local repo
-  repo=$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null) || return
+  repo=$(timeout 5s gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null) || return
   local me
-  me=$(gh api user -q '.login' 2>/dev/null) || return
+  me=$(timeout 5s gh api user -q '.login' 2>/dev/null) || return
 
   # Fetch only latest review cursor (lightweight)
   local reviews_json
-  reviews_json=$(gh pr view "$pr_number" --repo "$repo" --json reviews 2>/dev/null) || return
+  reviews_json=$(timeout 5s gh pr view "$pr_number" --repo "$repo" --json reviews 2>/dev/null) || return
 
   local latest_ts
   latest_ts=$(echo "$reviews_json" | jq -r '
@@ -382,8 +401,12 @@ main() {
   return 0
 }
 
+setup_monitor_lifecycle
 INTERVAL="${PRFORGE_LOCAL_WATCH_INTERVAL:-30}"
+if ! [[ "$INTERVAL" =~ ^[0-9]+$ ]]; then INTERVAL=30; fi
+[ "$INTERVAL" -lt 10 ] && INTERVAL=10
 while true; do
   main 2>/dev/null || true
+  [ "${PRFORGE_MONITOR_ONCE:-}" = "1" ] && break
   sleep "$INTERVAL"
 done

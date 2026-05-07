@@ -221,6 +221,6 @@ if [ -n "$BLOCKED_ACTIONS" ]; then
       exit 1
     fi
   done
-done
+fi
 
 exit 0

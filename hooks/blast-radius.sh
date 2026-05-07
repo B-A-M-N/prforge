@@ -19,11 +19,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=hooks/prforge-common.sh
 . "$SCRIPT_DIR/prforge-common.sh"
 
-# Diagnostic: log hook invocation (minimal, for validation only)
-mkdir -p "$(git rev-parse --show-toplevel 2>/dev/null)/.prforge" 2>/dev/null
-echo "$(date -Iseconds) [blast-radius] Write/Edit hook fired" >> "$(git rev-parse --show-toplevel 2>/dev/null)/.prforge/hook_events.log" 2>/dev/null || true
-
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+if [ ! -f "$REPO_ROOT/.prforge-run" ] && [ ! -f "$REPO_ROOT/.prforge/state.json" ]; then
+  exit 0
+fi
 HARNESS_DIR=$(prforge_artifact_dir "$REPO_ROOT")
 prforge_ensure_pointer "$REPO_ROOT" "$HARNESS_DIR" || exit 0
 
@@ -31,9 +30,6 @@ STATE_FILE="$HARNESS_DIR/state.json"
 if [ ! -f "$STATE_FILE" ]; then
   exit 0
 fi
-
-# Acquire exclusive lock on state.json to prevent concurrent hook writes
-prforge_lock_state "$STATE_FILE" || exit 0
 
 # ── Auto-discover MCP config (for context-mode detection) ──
 MCP_CONFIG=""
@@ -45,9 +41,13 @@ CONTRACT_FILE="$HARNESS_DIR/contract.md"
 
 # --- Compute blast radius metrics ---
 
+count_nonempty_lines() {
+  awk 'NF { count++ } END { print count + 0 }'
+}
+
 # 1. Files changed vs base
 CHANGED_FILES=$(git diff --name-only 2>/dev/null | sort -u || true)
-CHANGED_COUNT=$(echo "$CHANGED_FILES" | grep -c . || echo 0)
+CHANGED_COUNT=$(printf "%s\n" "$CHANGED_FILES" | count_nonempty_lines)
 
 # 2. Contract allowed files
 CONTRACT_FILES=""
@@ -64,7 +64,7 @@ except:
     pass
 " 2>/dev/null || echo "")
 fi
-CONTRACT_COUNT=$(echo "$CONTRACT_FILES" | grep -c . || echo 0)
+CONTRACT_COUNT=$(printf "%s\n" "$CONTRACT_FILES" | count_nonempty_lines)
 
 # 3. Unexpected files (changed but not in contract)
 UNEXPECTED_FILES=""
@@ -87,7 +87,7 @@ if unexpected:
     print('\n'.join(sorted(unexpected)))
 " 2>/dev/null || echo "")
 fi
-UNEXPECTED_COUNT=$(echo "$UNEXPECTED_FILES" | grep -c . || echo 0)
+UNEXPECTED_COUNT=$(printf "%s\n" "$UNEXPECTED_FILES" | count_nonempty_lines)
 
 # 4. Test coverage ratio
 TESTS_FOUND=""
@@ -102,7 +102,7 @@ if [ -n "$CHANGED_FILES" ]; then
     fi
   done <<< "$CHANGED_FILES"
 fi
-TESTS_COUNT=$(echo -e "$TESTS_FOUND" | grep -c . || echo 0)
+TESTS_COUNT=$(printf "%b\n" "$TESTS_FOUND" | count_nonempty_lines)
 
 # 5. Dependency depth (files importing changed files — shallow scan)
 # NOTE: When context-mode MCP is available, the agent should use
@@ -118,7 +118,7 @@ if [ -n "$CHANGED_FILES" ] && command -v rg &> /dev/null; then
     fi
   done <<< "$CHANGED_FILES"
 fi
-DEPENDENTS_COUNT=$(echo -e "$DEPENDENTS" | grep -c . || echo 0)
+DEPENDENTS_COUNT=$(printf "%b\n" "$DEPENDENTS" | count_nonempty_lines)
 
 # Check if context-mode MCP is available for better dependency analysis
 CONTEXT_MODE_AVAILABLE=false
@@ -156,8 +156,9 @@ elif [ "$CHANGED_COUNT" -gt 2 ] || [ "$UNEXPECTED_COUNT" -gt 0 ] || [ "$DEPENDEN
 fi
 
 # --- Update state.json ---
-python3 -c "
-import json, os
+TMP_STATE=$(mktemp "${TMPDIR:-/tmp}/prforge-blast-state.XXXXXX.json")
+if ! python3 -c "
+import json
 f = '$STATE_FILE'
 d = json.load(open(f))
 
@@ -185,8 +186,13 @@ else:
 d['scope']['delta_check']['contract_files'] = [l for l in '''$CONTRACT_FILES'''.splitlines() if l.strip()]
 d['scope']['delta_check']['actual_changed_files'] = [l for l in '''$CHANGED_FILES'''.splitlines() if l.strip()]
 
-open(f, 'w').write(json.dumps(d, indent=2))
-" 2>/dev/null || true
+open('$TMP_STATE', 'w').write(json.dumps(d, indent=2) + '\n')
+" 2>/dev/null; then
+  rm -f "$TMP_STATE"
+  exit 0
+fi
 
-prforge_unlock_state "$STATE_FILE"
+STATE_SCRIPT="$SCRIPT_DIR/../scripts/prforge_state.py"
+python3 "$STATE_SCRIPT" write "$STATE_FILE" "$TMP_STATE" >/dev/null 2>&1 || true
+rm -f "$TMP_STATE"
 exit 0

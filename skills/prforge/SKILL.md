@@ -56,22 +56,53 @@ summaries, PR bodies, review responses, and approval artifacts remain English re
 
 ---
 
+## CLI Status Footer
+
+PRForge displays a mode/worker status footer at the end of each turn (via Stop hook).
+The footer shows:
+
+```
+◆ PRForge │ ● standalone                    # standalone mode, no active run
+◆ PRForge │ ● standalone │ VALIDATE         # standalone mode, active run in VALIDATE
+◆ PRForge │ local-mesh │ ▸ worker │ ◌ idle         # mesh worker, idle
+◆ PRForge │ local-mesh │ ▸ worker │ ◉ active │ job_9f42a │ org/repo │ IMPLEMENT
+◆ PRForge │ lan-mesh │ ◆ coord+audit │ ● online │ 3 nodes │ 2 queued │ 1 active
+```
+
+**Symbols:**
+- `◆` PRForge active
+- `●` standalone mode / online
+- `▸` worker role
+- `◌` idle
+- `◉` active (working on a job)
+- `○` offline
+- `✗` blocked
+
+The footer is automatic. Do not suppress it. If the user asks about mesh status, run:
+```bash
+bash $PRFORGE_HOME/scripts/prforge_footer.sh
+```
+
+For full mesh details, use `/pr-mesh-status`.
+
+---
+
 ## State Machine
 
 Every PRForge run follows this internal pipeline. You execute it automatically.
 You do NOT ask the user to drive each phase.
 
 ```
-INTAKE → CONTRACT → REPRODUCE → IMPLEMENT → VALIDATE → SELF_REVIEW → PACKAGE → APPROVAL
-                                                                         ↓
-                              POSTMORTEM → MEMORY_INDEX → COMPLETE
+INTAKE → INVESTIGATE → PLAN → IMPLEMENT → VALIDATE → SELF_REVIEW → PACKAGE → APPROVAL
+                                                                          ↓
+                               POSTMORTEM → MEMORY_INDEX → COMPLETE
 ```
 
 | Phase | What happens | User sees |
 |-------|-------------|-----------|
 | **INTAKE** | Normalize input into a structured task. Detect repo, branch, remotes. Run memory preflight. | Brief acknowledgment |
-| **CONTRACT** | Create scope contract. Define allowed/forbidden files and actions. | Progress note |
-| **REPRODUCE** | Reproduce the issue locally. Confirm the bug exists before fixing. | Progress note |
+| **INVESTIGATE** | Repo intelligence, issue/PR analysis, repro attempt, failure characterization. Write `repo_intelligence.md`. | Progress note |
+| **PLAN** | Scope contract, patch plan, DoD. Write `contract.md`, `patch_plan.md`, `dod.md`. Hash `dod.md` immediately. | Progress note |
 | **IMPLEMENT** | Edit code, add tests, remove bad changes. Stay within scope. | Progress note |
 | **VALIDATE** | Run validation commands. Record honest results. | Progress note |
 | **SELF_REVIEW** | Hostile audit of own diff. Scope, correctness, validation honesty, git safety. | Progress note |
@@ -91,7 +122,7 @@ Once a phase gate is satisfied, the agent operates freely within that phase's en
 
 | Phase | Allowed | Blocked |
 |-------|---------|---------|
-| **INTAKE/CONTRACT/REPRODUCE** | Read, inspect, git log/diff/status | git push/commit/merge, gh pr * |
+| **INTAKE/INVESTIGATE/PLAN** | Read, inspect, git log/diff/status | git push/commit/merge, gh pr * |
 | **IMPLEMENT** | Edit, test, local git commit | git push, gh pr *, files outside contract |
 | **VALIDATE** | Run tests, git diff | git push/commit, gh pr * |
 | **SELF_REVIEW/PACKAGE** | Write artifacts | git push/commit, gh pr * |
@@ -106,7 +137,7 @@ Once a phase gate is satisfied, the agent operates freely within that phase's en
 
 **Step 1 — Find skill root (run once):**
 ```bash
-SKILL_ROOT=$(find "$HOME" -path "*/prforge/1.0.0/skills/prforge" -type d 2>/dev/null | head -1)
+SKILL_ROOT=$(find "$HOME" -path "*/skills/prforge" -type d 2>/dev/null | head -1)
 ```
 
 **Step 2 — Load state or initialize:**
@@ -176,7 +207,7 @@ Present any prior lessons to the user before investigating.
 
 Normal forward path:
 ```
-INTAKE → CONTRACT → REPRODUCE → IMPLEMENT → VALIDATE → SELF_REVIEW → PACKAGE → APPROVAL → POSTMORTEM → MEMORY_INDEX → COMPLETE
+INTAKE → INVESTIGATE → PLAN → IMPLEMENT → VALIDATE → SELF_REVIEW → PACKAGE → APPROVAL → POSTMORTEM → MEMORY_INDEX → COMPLETE
 ```
 
 Allowed corrective loops:
@@ -188,7 +219,7 @@ Allowed corrective loops:
 - `any phase → repair state → prior phase` (recoverable redirect)
 - `any phase → BLOCKED` (unresolvable blocker encountered)
 
-Repair states: `SCOPE_RECONCILE`, `STATE_SYNC_REPAIR`, `REVIEW_REFRESH`, `INTELLIGENCE_REPAIR`, `CONTRACT_UPDATE`, `PLAN_UPDATE`, `VALIDATION_REPAIR`, `ARTIFACT_REPAIR`, `COORDINATOR_RECONCILE`, `STYLE_REPAIR`, `COMMIT_REPAIR`, `POLL_CI`, `POSTMORTEM`, `MEMORY_INDEX`.
+Repair states: `SCOPE_RECONCILE`, `STATE_SYNC_REPAIR`, `REVIEW_REFRESH`, `INTELLIGENCE_REPAIR`, `SCOPE_UPDATE`, `PLAN_UPDATE`, `VALIDATION_REPAIR`, `ARTIFACT_REPAIR`, `COORDINATOR_RECONCILE`, `STYLE_REPAIR`, `COMMIT_REPAIR`, `POLL_CI`, `POSTMORTEM`, `MEMORY_INDEX`.
 
 No other transitions are valid. Shipping actions are only permitted from APPROVAL after explicit user approval.
 
@@ -269,7 +300,7 @@ When handling reviewer feedback:
 ## Hard Invariants
 
 1. **Never claim validation passed** unless the command actually ran and result is recorded in `validation_ledger.md`
-2. **Never commit PRForge artifacts** — `.prforge/`, `.prforge-run` must never be tracked or staged
+2. **Never commit PRForge artifacts** — `.prforge/`, `.prforge-run` must never be tracked or staged. **Never modify `.gitignore`** to add PRForge patterns — use `.git/info/exclude` only. All state files, artifacts, logs, and reports live outside the repo at `~/.prforge/runs/...`. The only repo-local file is the `.prforge-run` pointer, excluded via `.git/info/exclude`.
 3. **Never add AI attribution** — no co-author trailers, no "Generated by Claude", no AI footers
 4. **Never broaden scope** without updating `contract.md` first
 5. **Never ship with approval_status=BLOCKED** — fix blocker, regenerate, get approval

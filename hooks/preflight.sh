@@ -10,10 +10,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=hooks/prforge-common.sh
 . "$SCRIPT_DIR/prforge-common.sh"
 
-# Diagnostic: log hook invocation (minimal, for validation only)
-mkdir -p "$(git rev-parse --show-toplevel 2>/dev/null)/.prforge" 2>/dev/null
-echo "$(date -Iseconds) [preflight] Bash hook fired" >> "$(git rev-parse --show-toplevel 2>/dev/null)/.prforge/hook_events.log" 2>/dev/null || true
-
 # --- Read Hook Input ---
 HOOK_JSON=$(cat)
 
@@ -48,12 +44,17 @@ if [ -f "$HOME/.prforge-mesh/sessions/local/$(prforge_get_session_id 2>/dev/null
   fi
 
   if [ "$RUN_CHECK" = true ]; then
-    MESH_SCRIPTS=$(find "$HOME" -path "*/prforge/*/scripts/mesh" -type d 2>/dev/null | head -1)
+    MESH_SCRIPTS=""
+    if [ -d "$SCRIPT_DIR/../scripts/mesh" ]; then
+      MESH_SCRIPTS="$(cd "$SCRIPT_DIR/../scripts/mesh" 2>/dev/null && pwd)"
+    elif [ -n "${CLAUDE_PLUGIN_ROOT:-}" ] && [ -d "$CLAUDE_PLUGIN_ROOT/scripts/mesh" ]; then
+      MESH_SCRIPTS="$CLAUDE_PLUGIN_ROOT/scripts/mesh"
+    fi
     if [ -n "$MESH_SCRIPTS" ]; then
       SID=$(prforge_get_session_id 2>/dev/null || echo "")
       if [ -n "$SID" ]; then
-        if ! python3 "$MESH_SCRIPTS/meshctl.py" health --session "$SID" 2>/dev/null; then
-          if python3 "$MESH_SCRIPTS/meshctl.py" heal --session "$SID" 2>/dev/null; then
+        if ! timeout 5s python3 "$MESH_SCRIPTS/meshctl.py" health --session "$SID" 2>/dev/null; then
+          if timeout 10s python3 "$MESH_SCRIPTS/meshctl.py" heal --session "$SID" 2>/dev/null; then
             echo "Mesh was stale. Restarted node. Continuing."
           fi
         fi
@@ -755,6 +756,24 @@ CONTRACT="$HARNESS_DIR/contract.md"
 VALIDATION="$HARNESS_DIR/validation_ledger.md"
 if [ -f "$CONTRACT" ] && [ ! -f "$VALIDATION" ]; then
   ISSUES+=("PR Contract exists but no validation ledger — run validation first")
+fi
+
+# --- Executable approval verifier ---
+# Keep this near the end so legacy shell diagnostics remain visible, but make
+# the final public-action decision depend on the same verifier /pr-approve uses.
+APPROVAL_VERIFIER="$SCRIPT_DIR/../scripts/pr_approve.py"
+if [ "$IS_PUBLIC_ACTION" = "true" ] && [ "$PHASE" = "APPROVAL" ]; then
+  if [ ! -f "$APPROVAL_VERIFIER" ]; then
+    ISSUES+=("Executable approval verifier missing: $APPROVAL_VERIFIER")
+  else
+    VERIFY_JSON=$(python3 "$APPROVAL_VERIFIER" --repo "$REPO_ROOT" --json "$CMD" 2>/dev/null || true)
+    VERIFY_OK=$(printf "%s" "$VERIFY_JSON" | python3 -c "import json,sys; print('true' if json.load(sys.stdin).get('ok') else 'false')" 2>/dev/null || echo "false")
+    if [ "$VERIFY_OK" != "true" ]; then
+      while IFS= read -r issue; do
+        [ -n "$issue" ] && ISSUES+=("Approval verifier: $issue")
+      done < <(printf "%s" "$VERIFY_JSON" | python3 -c "import json,sys; [print(x) for x in json.load(sys.stdin).get('issues', [])]" 2>/dev/null || echo "approval verification failed")
+    fi
+  fi
 fi
 
 # --- Output ---
