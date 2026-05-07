@@ -69,7 +69,7 @@ Generic questions ("should I proceed?") are not sufficient.
 
 ## Approval Fingerprint Integrity
 
-At SHIPPED time, the `/pr-approve` command verifies:
+Before any approved public action executes, the `/pr-approve` command verifies:
 - `DIFF_HASH` matches current `git diff --stat` (diff hasn't changed since approval)
 - `VAL_HASH` matches current `validation_ledger.md` (ledger wasn't modified)
 - `APPROVAL_HASH` matches current `approval.md` (approval artifact wasn't modified)

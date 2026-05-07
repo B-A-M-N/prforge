@@ -32,7 +32,7 @@ This document represents a total technical map of the PRForge system. No detail 
 10. **Self-Reviews Hostilely** — audits its own diff using a 10-question checklist for correctness, scope, hygiene, and artifact exclusion.
 11. **Generates Maintainer-Grade Responses** — drafts PR bodies and review responses without AI attribution.
 12. **Blocks Unsafe Git Actions** — prevents pushes to upstream, blind force-pushes, and WIP commits.
-13. **Verifies Approval Integrity** — SHA256 hashes of diff, validation ledger, approval.md, and dod.md verified at SHIPPED time.
+13. **Verifies Approval Integrity** — SHA256 hashes of diff, validation ledger, approval.md, and dod.md verified before APPROVAL advances to POSTMORTEM.
 14. **Learns from Every PR** — automated `postmortem.json` generation and SQLite memory indexing (FTS5).
 15. **Checks Review Freshness** — re-fetches comments and CI status before packaging; returns to INVESTIGATE if stale.
 16. **Classifies CI Status** — distinguishes related check failures from pre-existing noise.
@@ -59,8 +59,7 @@ graph TD
         V --> SR[SELF_REVIEW]
         SR --> PK[PACKAGE]
         PK --> AP[APPROVAL]
-        AP -->|User approves| S[SHIPPED]
-        S --> PM[POSTMORTEM]
+        AP -->|User approves; outcome recorded| PM[POSTMORTEM]
         PM --> MI[MEMORY_INDEX]
         MI --> C[COMPLETE]
     end
@@ -97,10 +96,10 @@ graph LR
 ## 4. Command Reference (Exhaustive Reference)
 
 ### 4.1 Primary Workflow Commands
-*   **`/pr <target>`**: Primary entry point. Normalizes input, detects task type (`new_pr`, `review_response`, `pr_polish`, `ci_fix`, `candidate_discovery`), and initializes `state.json`.
+*   **`/pr <target>`**: Primary entry point. Normalizes input, detects task type (`new_pr`, `review_response`, `pr_polish`, `ci_fix`, `candidate_discovery`), and initializes outside-repo run state resolved from the repo `.prforge-run` pointer.
 *   **`/pr-continue`**: Resumes work. Checks `inbox/job.json` (assigned mesh work) and `inbox/revision.json` (auditor requested fixes).
 *   **`/pr-approve`**: High-integrity release gate. Verifies HMAC-SHA256 signatures and artifact re-hashes to detect drift.
-*   **`/pr-rollback`**: Reset. Runs `git checkout .`, `git reset --hard HEAD`, and returns to the base branch.
+*   **`/pr-rollback`**: Recovery assistant. Inspects repo state, separates PRForge-owned artifacts from user work, and proposes non-destructive rollback steps. Destructive git cleanup requires explicit user approval.
 
 ### 4.2 Distributed Mesh (Horizontal Scaling)
 *   **`/pr-distributed watchtower`**: Initializes PC1. Starts Redis (Port 6386) with auth and generates `mesh-secret`.
@@ -130,7 +129,7 @@ Transitions are gated by `hooks/phase-boundary.sh`. Illegal transitions (e.g., I
 
 #### Phase 1: INTAKE
 *   **Responsibility**: Context normalization & Memory injection.
-*   **Entry Criteria**: Task type determined (new_pr, review_response, issue_fix, ci_fix, local_task, candidate_discovery); Repo identity confirmed (name, remotes, current branch); Intelligence mode detected (full_gitnexus / degraded_gh / degraded_local); `.prforge/` directory created; `.prforge/state.json` and `.prforge/task.json` written; Safety snapshot taken (`.prforge/snapshots/preflight.patch`).
+*   **Entry Criteria**: Task type determined (new_pr, review_response, issue_fix, ci_fix, local_task, candidate_discovery); Repo identity confirmed (name, remotes, current branch); Intelligence mode detected (full_gitnexus / degraded_gh / degraded_local); outside-repo `$ARTIFACT_DIR` created and resolved through `.prforge-run`; `$ARTIFACT_DIR/state.json` and `$ARTIFACT_DIR/task.json` written; Safety snapshot taken (`$ARTIFACT_DIR/snapshots/preflight.patch`).
 *   **Exit Criteria**: Task normalized into `task.json` with type, source_url, objective; Permissions set: edit/test/commit = true, push/post/force_push = false; If review_response: review comments fetched and decomposed.
 *   **Blockers**: Repo cannot be identified; Dirty tree contains unknown user edits; GitHub context cannot be fetched.
 
@@ -173,11 +172,11 @@ Transitions are gated by `hooks/phase-boundary.sh`. Illegal transitions (e.g., I
 #### Phase 8: APPROVAL
 *   **Responsibility**: Human sign-off & integrity fingerprinting.
 *   **Entry Criteria**: User explicitly approved the action; Approved action matches what's in `approval.md`.
-*   **Exit Criteria**: Action executed exactly as approved; `state.json` phase updated to SHIPPED (via `/pr-approve`).
+*   **Exit Criteria**: Action executed exactly as approved; terminal `outcome` recorded; `state.json` phase can advance to POSTMORTEM.
 
 #### Phase 9: POSTMORTEM
 *   **Responsibility**: (Auto) Lifecycle analysis & evidence capture.
-*   **Entry Criteria**: Run SHIPPED; Terminal snapshot captured (`terminal_snapshot.py`).
+*   **Entry Criteria**: Approved action completed or terminal outcome recorded; Terminal snapshot captured (`terminal_snapshot.py`).
 *   **Exit Criteria**: `postmortem.json` generated with Summary, Evidence, and Tags.
 
 #### Phase 10: MEMORY_INDEX
@@ -303,7 +302,7 @@ The auditor uses three independent cursors to implement the **Skip-if-unchanged 
 ### 9.3 Worker Lease Management (roles/worker.md)
 Workers renew all four leases every 15s (Heartbeat interval):
 1.  **`lease:job:<id>`**: Job ownership lock.
-2.  **`lease:pr:<repo>:<pr>`**: Uniqueness lock per pull request.
+2.  **`lease:target:<repo>:pr:<pr>`**: Uniqueness lock per pull request target.
 3.  **`lease:branch:<repo>:<branch>`**: Branch uniqueness lock.
 4.  **`lease:worker:<node_id>`**: Busy lock for the worker node itself.
 *   **Heartbeat TTL**: Node keys expire after `HB_INTERVAL * 3` missed heartbeats.

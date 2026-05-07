@@ -1,6 +1,8 @@
-# Phase 9: SHIPPED
+# Legacy Playbook: SHIPPED
 
-Read this file at the START of SHIPPED after user gives explicit approval.
+Do not enter `SHIPPED` as a canonical state. Current PRForge advances from
+APPROVAL to POSTMORTEM after approved actions complete and records the terminal
+result in `state.outcome`.
 
 ---
 
@@ -23,12 +25,12 @@ Read this file at the START of SHIPPED after user gives explicit approval.
   # must equal state.approval.validation_hash
   ```
 - [ ] `state.release.suggested_actions` exists and is non-empty
-- [ ] `.prforge/` is not tracked or staged:
+- [ ] PRForge runtime artifacts are not tracked or staged:
   ```bash
-  git ls-files .prforge/          # must return empty
-  git status --short -- .prforge/ # must return empty
+  git ls-files .prforge .prforge-run          # must return empty
+  git status --short -- .prforge .prforge-run # must return empty
   ```
-  If either returns output: **hard stop**. Run `git reset HEAD .prforge/` and `git rm --cached -r .prforge/` to clean, then re-verify before proceeding. Do not push with `.prforge/` in the index under any circumstances.
+  If either returns output: **hard stop**. Do not run destructive cleanup by default. Move to BLOCKED and ask the user before unstaging or removing tracked runtime artifacts.
 
 If any hash mismatches: diff or validation changed after approval. **Hard block** — return to PACKAGE, regenerate approval, get fresh approval before proceeding.
 
@@ -44,7 +46,7 @@ The `/pr-approve` command verifies integrity and dispatches execution. Follow it
 
 ## Shipping Ledger
 
-After each successful public action, append to `.prforge/shipping_ledger.json` (create if absent; append to array if exists — never overwrite):
+After each successful public action, append to `$ARTIFACT_DIR/shipping_ledger.json` (create if absent; append to array if exists — never overwrite):
 
 ```json
 {
@@ -61,10 +63,10 @@ After each successful public action, append to `.prforge/shipping_ledger.json` (
 
 ## Completion
 
-After all approved actions complete, update state:
+After all approved actions complete, update state through the canonical path:
 
 ```json
-{ "phase": "SHIPPED", "approval": { "consumed": true } }
+{ "phase": "POSTMORTEM", "outcome": "MERGED|CLOSED|ABANDONED|REVERTED", "approval": { "consumed": true } }
 ```
 
 Confirm to the user what was done:

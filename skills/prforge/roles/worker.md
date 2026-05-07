@@ -83,7 +83,7 @@ Worker writes `.prforge/outbox/status.json` after each phase transition to repor
 
 While a job is active, the worker renews all four leases every heartbeat interval:
 - `Workflow:<cluster>:lease:job:<job_id>`
-- `Workflow:<cluster>:lease:pr:<repo>:<pr>`
+- `Workflow:<cluster>:lease:target:<repo>:pr:<pr>`
 - `Workflow:<cluster>:lease:branch:<repo>:<branch>`
 - `Workflow:<cluster>:lease:worker:<node_id>`
 

@@ -47,7 +47,7 @@ Machine 1 (worker-1)          Machine 2 (worker-2)
 | `Workflow:<c>:stream:jobs:active` | STREAM | Active job tracking |
 | `Workflow:<c>:stream:events` | STREAM | Audit event log |
 | `Workflow:<c>:lease:job:<job_id>` | STRING | Job lease (SET NX EX) |
-| `Workflow:<c>:lease:pr:<repo>:<pr>` | STRING | PR uniqueness lock |
+| `Workflow:<c>:lease:target:<repo>:pr:<pr>` | STRING | PR/issue target uniqueness lock |
 | `Workflow:<c>:lease:branch:<repo>:<branch>` | STRING | Branch uniqueness lock |
 | `Workflow:<c>:lease:worker:<node_id>` | STRING | Worker busy lock |
 | `Workflow:<c>:notify` | PUBSUB | Live notifications only |
@@ -107,7 +107,7 @@ Machine 1 (worker-1)          Machine 2 (worker-2)
 5. Run artifacts live outside repos under `~/.prforge/runs`; repo-local state is at most an ignored `.prforge-run` pointer
 6. max_active_worker_jobs = 2 (global hard cap)
 7. max_jobs_per_worker = 1
-8. Same PR cannot hold two active leases simultaneously
+8. Same PR/issue target cannot hold two active target leases simultaneously
 9. Worker leases must be acquired atomically — partial failure = release all
 10. Pub/Sub for notifications only — Streams for durable dispatch
 11. Intel/reranker output may increase caution or redirect, but may not bypass public-action safety
@@ -196,7 +196,7 @@ appendonly yes
 - PASS E: LLM audit budget (Redis ZSET, survives daemon restart)
 - PASS F: medium_idle_only (P0/P1 pressure detection in stream + active jobs)
 - PASS G: role isolation (_node_is_worker, auditor startup check)
-- PASS H: duplicate PR lease blocked, 4-lease atomic rollback
+- PASS H: duplicate target lease blocked, 4-lease atomic rollback
 - PASS I: max 2 active worker jobs enforced
 - PASS J: standalone /pr-continue no-op without inbox, worker packet schema
 - PASS worker heartbeat

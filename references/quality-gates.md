@@ -177,7 +177,7 @@ from repo `.prforge-run`; see `references/artifact-location.md`.
 
 ### Exit Criteria
 - [ ] Action executed exactly as approved
-- [ ] `state.json` phase updated to SHIPPED
+- [ ] terminal outcome recorded and `state.json` can advance to POSTMORTEM
 - [ ] User confirmed what was done
 
 ---
@@ -194,7 +194,8 @@ If the user explicitly wants to skip phases:
    - Timestamp: [ISO date]
    - User confirmed: [what they said]
    ```
-2. Update `$ARTIFACT_DIR/state.json` phase to the target phase.
-3. Proceed with the remaining gates.
+2. Move to `BLOCKED` with `return_to_phase_after_recovery` set to the current phase.
+3. Present the override artifact and the exact gates that would be bypassed.
+4. Continue only for local/experimental work after explicit confirmation. Do not set `state.json` directly to the target phase for upstream PR work; the phase-boundary hook must still enforce valid transitions.
 
 This exists for local/experimental work. Never use for upstream PRs.

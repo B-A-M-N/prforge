@@ -20,6 +20,6 @@
   "transition_guards": {
     "INVESTIGATE → PLAN": "polish.findings must be non-empty array (empty = nothing to polish = BLOCKED)",
     "PACKAGE → APPROVAL": "polish.requires_approval must be true and approval.md must preview all proposed changes",
-    "APPROVAL → SHIPPED": "polish.allows_actions must match state.approval.approved_actions exactly"
+    "APPROVAL → POSTMORTEM": "polish.allows_actions must match state.approval.approved_actions exactly before any public action"
   }
 }

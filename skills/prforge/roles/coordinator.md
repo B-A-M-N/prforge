@@ -69,7 +69,7 @@ These limits are enforced by code constants, not config values.
 
 All four leases must be acquired atomically before assignment:
 - `Workflow:<cluster>:lease:job:<job_id>` — job ownership
-- `Workflow:<cluster>:lease:pr:<repo>:<pr>` — PR uniqueness
+- `Workflow:<cluster>:lease:target:<repo>:pr:<pr>` — PR/issue target uniqueness
 - `Workflow:<cluster>:lease:branch:<repo>:<branch>` — branch uniqueness
 - `Workflow:<cluster>:lease:worker:<node_id>` — worker busy
 

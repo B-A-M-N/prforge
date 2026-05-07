@@ -415,19 +415,19 @@ print('OK')
     fail "G: auditor startup" "role check not enforced at startup"
 
 # ---------------------------------------------------------------------------
-# H. Duplicate PR lease blocked
+# H. Duplicate target lease blocked
 # ---------------------------------------------------------------------------
 
-PR_LEASE="Workflow:${CLUSTER}:lease:pr:validate_org_validate_repo:9999"
-rcli DEL "$PR_LEASE" > /dev/null
+TARGET_LEASE="Workflow:${CLUSTER}:lease:target:validate_org_validate_repo:pr:9999"
+rcli DEL "$TARGET_LEASE" > /dev/null
 
-FIRST=$(rcli SET "$PR_LEASE" "job_a" NX EX 30)
-SECOND=$(rcli SET "$PR_LEASE" "job_b" NX EX 30)
-rcli DEL "$PR_LEASE" > /dev/null
+FIRST=$(rcli SET "$TARGET_LEASE" "job_a" NX EX 30)
+SECOND=$(rcli SET "$TARGET_LEASE" "job_b" NX EX 30)
+rcli DEL "$TARGET_LEASE" > /dev/null
 
 [[ "$FIRST" == "OK" && ( -z "$SECOND" || "$SECOND" == "" ) ]] && \
-    pass "H: duplicate PR lease blocked" || \
-    fail "H: duplicate PR lease blocked" "FIRST=$FIRST SECOND=$SECOND"
+    pass "H: duplicate target lease blocked" || \
+    fail "H: duplicate target lease blocked" "FIRST=$FIRST SECOND=$SECOND"
 
 # Atomic 4-lease acquisition — partial failure releases all
 py "
@@ -449,7 +449,7 @@ target_lk = rb.lease_target(cluster, repo_slug, 'pr', str(job['pr_number']))
 r.set(target_lk, 'other_job', ex=30)
 
 ok, acquired = rb.acquire_job_leases(r, cluster, job, 'worker-test', 30)
-assert not ok, 'Should fail when PR lease is occupied'
+assert not ok, 'Should fail when target lease is occupied'
 assert len(acquired) == 0, f'Should have released all leases, got {acquired}'
 
 # Verify job lease was not left dangling

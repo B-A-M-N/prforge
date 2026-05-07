@@ -33,15 +33,37 @@ public actions: none executed
 - scorer path: `scripts/candidate_discovery.py`.
 - fixture/test path: `scripts/tests/discovery/test_candidate_scoring_regression.py`.
 - ranking assertions: the fixture verifies a small, locally testable, maintainer-confirmed bug ranks first.
-- downgrade assertions: the fixture verifies claimed/assigned, large refactor-like, stale/no-maintainer-response, and auth/core-risk candidates receive penalties and rank below the best candidate.
-- reason assertions: the fixture verifies scored output contains reasons such as `locally testable` and `maintainer confirmed`, plus penalties such as `claimed or assigned` and `high dependency/auth/core risk`.
+- downgrade assertions: the fixture verifies claimed/assigned, duplicate, large refactor-like, stale/no-maintainer-response, and auth/core-risk candidates receive penalties and rank below the best candidate.
+- reason assertions: the fixture verifies scored output contains reasons such as `locally testable` and `maintainer confirmed`, plus penalties such as `claimed or assigned`, `duplicate/already covered`, and `high dependency/auth/core risk`.
+- decision output assertions: the fixture verifies `risk_level`, `reason_summary`, `likely_files`, `subsystems`, `testability_signal`, `maintainer_signal`, `scope_size_signal`, `claimed_duplicate_stale_signal`, `suggested_next_action`, and `reject_reason`.
 - empty-result behavior: the fixture verifies `[]` returns `{"status": "no_candidates", "candidates": []}` without crashing.
+
+## product-standard audit
+
+| area | intended behavior | current proof | gap | severity | fix plan |
+|---|---|---|---|---:|---|
+| lifecycle | phase is explicit, legal transitions enforced, repair path named | `scripts/validate_phase_machine.py`; hook regression suite | legacy docs still referred to `SHIPPED` as a state | p1 | fixed wording to canonical APPROVAL -> POSTMORTEM with terminal `outcome` |
+| candidate discovery | rankings explain score, risk, scope, testability, maintainer status, likely files, and reject reason | `scripts/tests/discovery/test_candidate_scoring_regression.py` | scorer output was too thin for selection decisions | p1 | enriched scorer output and fixture assertions |
+| repo investigation | repo intelligence artifact required before PLAN | phase-boundary checks and quality gates | no new gap found in this pass | p2 | leave; covered by existing acceptance |
+| pr contract | allowed files, patch plan, dod, and validation commands required before edits | phase-boundary, policy engine, `validation_evidence.py` | no new gap found in this pass | p2 | leave; covered by existing acceptance |
+| validation evidence | pr body cannot claim unrun commands | `scripts/validation_evidence.py`; hook regression suite | no new gap found in this pass | p2 | leave |
+| approval integrity | exact public text and hashes checked before public action | `scripts/pr_approve.py`; hook regression suite | docs used stale shipped-time wording | p1 | fixed approval wording |
+| git safety | upstream pushes and unsafe force pushes blocked | `scripts/tests/hooks/test_preflight.sh`; approval verifier regressions | no new gap found in this pass | p2 | leave |
+| mesh locks | worker/coordinator/hook agree on target/path leases | mesh integration test and validator | docs and validator label still used legacy `lease:pr` wording | p1 | fixed docs and validator target lease wording |
+| monitors | daemons start/stop, prevent duplicate processes, and use bounded loops | hook regression suite; `bash -n monitors/*.sh` | no new gap found in this pass | p2 | leave; no long soak claimed |
+| memory | postmortem lessons are evidence-backed, scoped, indexed, and recalled | `scripts/tests/memory/test_memory_indexing_regression.py` | no new gap found in this pass | p2 | leave |
+| hooks | inactive hooks quiet, no repo-local artifact pollution | hook smoke and artifact checks | no new gap found in this pass | p2 | leave |
+| recovery states | blocked agents get reason and repair path | hook regression suite; quality gates | emergency override docs suggested direct phase mutation | p1 | fixed to BLOCKED + explicit override artifact |
+| docs/ux | docs match actual artifact paths and safety model | acceptance report and dod | readme used repo-local `.prforge` state and destructive rollback wording | p1 | fixed narrowly |
 
 ## standards audit
 
 | finding | severity | file | why it matters | fix or leave? | reason |
 |---|---:|---|---|---|---|
 | destructive rollback guidance suggested `git checkout .` and `git reset --hard` | p1 | `commands/pr-rollback.md` | could encourage loss of user work during rollback | fixed | replaced with status-first, preserve-user-work, quarantine, and ask-before-destructive guidance |
+| candidate discovery lacked decision fields | p1 | `scripts/candidate_discovery.py` | output did not include enough context to choose or reject work confidently | fixed | added risk, summary, scope/testability/maintainer signals, inferred files/subsystems, suggested next action, and reject reason |
+| legacy mesh target lock wording | p1 | `README.md`, `docs/MESH_IMPLEMENTATION.md`, `skills/prforge/roles/*`, `scripts/mesh/validate_mesh.sh` | docs/test labels could make hook/worker lease model look inconsistent | fixed | changed to target lease terminology |
+| stale shipped/artifact-path wording | p1 | `README.md`, `references/quality-gates.md`, `skills/prforge/phases/shipped.md`, `skills/prforge/policies/approval-gate.md` | implied non-canonical phase or repo-local artifacts | fixed | clarified APPROVAL -> POSTMORTEM and outside-repo artifacts |
 | bounded home scan guarded by env flag | p2 | `hooks/phase-injector.sh` | possible latency if explicitly enabled | leave | disabled by default and bounded |
 | fake redis modules in tests | p2 | `scripts/mesh_test.py`, `scripts/tests/mesh/test_mesh_redis_integration.py` | wording matched audit grep | leave | intentional in-memory test double, not runtime fake gate |
 | empty github marker artifacts when `gh` data is unavailable | p2 | `scripts/terminal_snapshot.py` | wording matched placeholder grep | leave | code records explicit metadata status instead of pretending data exists |
@@ -73,6 +95,15 @@ python3 scripts/tests/mesh/test_mesh_redis_integration.py
 python3 scripts/validate_phase_machine.py
 python3 scripts/tests/memory/test_memory_indexing_regression.py
 python3 scripts/tests/discovery/test_candidate_scoring_regression.py
+time bash hooks/mesh-lock-guard.sh </dev/null || true
+time bash hooks/preflight.sh </dev/null || true
+time bash hooks/phase-gate-enforcer.sh </dev/null || true
+time bash hooks/phase-injector.sh </dev/null || true
+time bash hooks/memory-autocapture.sh </dev/null || true
+time bash hooks/blast-radius.sh </dev/null || true
+git status --short
+find . -maxdepth 3 -type f \( -name 'hook_events.log' -o -name '.prforge-run' \) -print
+find . -maxdepth 3 -type d -name '.prforge' -print
 ```
 
 ## commits created for this hardening pass
@@ -80,6 +111,7 @@ python3 scripts/tests/discovery/test_candidate_scoring_regression.py
 - `a6a1caf test(memory): add deterministic indexing recall regression`
 - `65ab2b1 test(discovery): add deterministic candidate scoring fixture`
 - `5b5dd89 docs(rollback): remove destructive default guidance`
+- `5080498 fix(discovery): enrich candidate scoring output`
 
 ## remaining known limitations
 
