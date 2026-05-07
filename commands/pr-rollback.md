@@ -17,7 +17,8 @@ if [ -f "$HOME/prforge/scripts/mesh/fix_gaps.py" ]; then
 fi
 
 echo "To manually rollback:"
-echo "1. Run git checkout . to clear dirty working tree"
-echo "2. Run git reset --hard HEAD to remove uncommitted changes"
-echo "3. Run git checkout <original-branch> to revert to base branch"
+echo "1. Run git status --short and identify PRForge-owned changes"
+echo "2. Preserve unrelated or user-owned changes; do not discard them"
+echo "3. Move unsafe distributed worktrees to quarantine instead of deleting them"
+echo "4. Ask before any destructive restore, reset, clean, or branch switch"
 ```
