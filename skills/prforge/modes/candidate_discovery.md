@@ -71,6 +71,17 @@ Score each issue on:
 What matters is scope clarity, solution consensus, and local testability — not the domain.
 An auth bug with a clear repro and agreed fix is better than a vague "refactor" with no direction.
 
+Use the deterministic scorer when candidate data has been collected into JSON:
+
+```bash
+python3 $PRFORGE_HOME/scripts/candidate_discovery.py "$ARTIFACT_DIR/candidates.json" \
+  > "$ARTIFACT_DIR/candidate_ranking.json"
+```
+
+The input is an array of issue objects from the gathered `gh` output plus any
+comment details. The output includes `score`, `recommendation`, `reasons`, and
+`penalties` for each candidate so ranking is reproducible and reviewable.
+
 ### Step 4: Present by type, ranked within each type
 
 ```
