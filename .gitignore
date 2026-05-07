@@ -15,6 +15,8 @@ __pycache__/
 # PRForge runtime
 .remember/
 .prforge/
+.prforge-run
+.prforge-*
 .gemini_security/
 .serena/
 
@@ -36,3 +38,4 @@ Thumbs.db
 # Temp/tooling
 =*
 conductor/
+test_postmortem.json
