@@ -33,6 +33,7 @@ from redis_backend import (
     acquire_job_leases,
     acquire_path_locks_atomic,
     emit_event,
+    enqueue_job,
     get_job,
     lease_path,
     list_nodes,
@@ -72,12 +73,14 @@ PRIORITY_ORDER = {"P0": 0, "P1": 1, "P2": 2, "P3": 3, "P4": 4}
 # Job types that workers may execute. audit_only is auditor-side only.
 WORKER_JOB_TYPES = {
     "review_response", "pr_polish", "ci_fix_related_to_branch", "new_pr",
+    "same_file_review_assist",
 }
 
 # Sub-types that are coordinator-certified (require path lock acquisition)
 MUTATING_JOB_TYPES = {"review_response", "pr_polish", "ci_fix_related_to_branch", "new_pr"}
 
-
+# Artifact directory convention
+ARTIFACT_BASE = Path.home() / ".prforge-mesh" / "artifacts"
 
 
 def run(r: redis.Redis, cluster: str, config: dict) -> None:
@@ -236,11 +239,15 @@ def _tick(r: redis.Redis, cluster: str, lease_ttl: int, config: dict | None = No
                 if not path_ok:
                     logger.info(
                         "Path lock acquisition failed for job=%s worker=%s — "
-                        "skipping dispatch. Blocked: %s",
+                        "creating advisory job. Blocked: %s",
                         job.get("job_id"), wid, blocked,
                     )
                     # Release job leases since we're not dispatching this job
                     _release_job_leases_safe(r, cluster, job, wid)
+                    # Create advisory job for the blocked worker
+                    _create_advisory_job(
+                        r, cluster, job, wid, blocked, config,
+                    )
                     continue
 
                 path_keys = [lease_path(cluster, repo_slug, normalize_path_for_lease(p))
@@ -348,6 +355,85 @@ def _release_job_leases_safe(
         )
     except Exception:
         logger.exception("Failed to release job leases for job %s", job.get("job_id"))
+
+
+def _create_advisory_job(
+    r: redis.Redis,
+    cluster: str,
+    blocked_job: dict,
+    blocked_worker_id: str,
+    blocked_details: list[dict],
+    config: dict | None,
+) -> None:
+    """Create a same_file_review_assist job when path lock acquisition fails.
+
+    De-duplicates: one advisory job per (blocked_job_id, owner_job_id, lock-set-hash).
+    """
+    import hashlib
+
+    blocked_job_id = blocked_job.get("job_id", "")
+    locked_paths = [d["path"] for d in blocked_details]
+    owner_job_id = blocked_details[0].get("owner_job_id", "") if blocked_details else ""
+    owner_worker_id = blocked_details[0].get("owner_worker_id", "") if blocked_details else ""
+
+    # De-dup key
+    lock_hash = hashlib.sha1(
+        ":".join(sorted(locked_paths)).encode()
+    ).hexdigest()[:12]
+    dedupe_key = (
+        f"Workflow:{cluster}:advisory:"
+        f"{blocked_job_id}:{owner_job_id}:{lock_hash}"
+    )
+    if r.exists(dedupe_key):
+        logger.debug("Advisory job already exists for %s — skipping", dedupe_key)
+        return
+
+    advisory_job_id = f"advisory-{blocked_job_id[:8]}-{lock_hash}"
+    now = datetime.now(timezone.utc).isoformat()
+
+    # Owner artifact directory
+    owner_artifact_dir = str(ARTIFACT_BASE / cluster / owner_job_id)
+
+    advisory_job = {
+        "job_id": advisory_job_id,
+        "type": "same_file_review_assist",
+        "priority": blocked_job.get("priority", "P4"),
+        "status": "queued",
+        "repo": blocked_job.get("repo", ""),
+        "pr_number": str(blocked_job.get("pr_number", "")),
+        "head_branch": blocked_job.get("head_branch", ""),
+        "base_branch": blocked_job.get("base_branch", "main"),
+        "source_url": blocked_job.get("source_url", ""),
+        "objective": (
+            f"Review and produce advisory notes for {blocked_job.get('repo', '')} "
+            f"PR #{blocked_job.get('pr_number', '')}. "
+            f"Locked paths: {', '.join(locked_paths)}"
+        ),
+        "blocked_job_id": blocked_job_id,
+        "owner_job_id": owner_job_id,
+        "owner_worker_id": owner_worker_id,
+        "locked_paths": json.dumps(locked_paths),
+        "owner_artifact_dir": owner_artifact_dir,
+        "mode": "read_only",
+        "created_at": now,
+    }
+
+    # Enqueue the advisory job
+    enqueue_job(r, cluster, advisory_job)
+
+    # Mark de-dup key
+    r.setex(dedupe_key, 3600, "exists")
+
+    logger.info(
+        "Created advisory job %s for blocked job %s (owner: %s, paths: %s)",
+        advisory_job_id, blocked_job_id, owner_worker_id, locked_paths,
+    )
+    emit_event(r, cluster, "AdvisoryJobCreated", {
+        "advisory_job_id": advisory_job_id,
+        "blocked_job_id": blocked_job_id,
+        "owner_job_id": owner_job_id,
+        "locked_paths": json.dumps(locked_paths),
+    })
 
 
 def _reap_stale_workers(

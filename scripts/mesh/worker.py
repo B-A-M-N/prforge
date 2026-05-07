@@ -228,8 +228,14 @@ def _tick(
                    desktop=desktop, pubsub=pubsub)
             return
 
-        _write_inbox(job, repo_path, cluster, node_id, config or {"limits": {"lease_ttl_seconds": lease_ttl}})
-        _write_distributed_json(job, repo_path, cluster, node_id, config)
+        job_type = job.get("type", "")
+
+        # Handle same_file_review_assist jobs
+        if job_type == "same_file_review_assist":
+            _write_advisory_inbox(job, repo_path, cluster, node_id, config)
+        else:
+            _write_inbox(job, repo_path, cluster, node_id, config or {"limits": {"lease_ttl_seconds": lease_ttl}})
+            _write_distributed_json(job, repo_path, cluster, node_id, config)
 
         upsert_job(r, cluster, {**job, "status": "active"})
         node_state["status"]     = "active"
@@ -245,7 +251,7 @@ def _tick(
         notify(r, cluster, "JobDispatched",
                f"Job {active_job_id} ready at {artifact_dir}/inbox/job.json",
                desktop=desktop, pubsub=pubsub)
-        logger.info("Wrote inbox for job=%s repo=%s", active_job_id, repo_path)
+        logger.info("Wrote inbox for job=%s repo=%s type=%s", active_job_id, repo_path, job_type)
 
     # 4. Active job — renew leases, read outbox status
     elif status == "active":
@@ -472,6 +478,59 @@ def _write_distributed_json(
         },
     }
     (pf_dir / "distributed.json").write_text(json.dumps(data, indent=2))
+
+
+def _write_advisory_inbox(
+    job: dict,
+    repo_path: str,
+    cluster: str,
+    node_id: str,
+    config: dict | None,
+) -> None:
+    """Write inbox for a same_file_review_assist job.
+
+    The advisory worker reads the owner's artifacts and produces
+    review/risk/test-suggestion notes. No source file mutations.
+    """
+    artifact_dir = _artifact_dir(job, repo_path)
+    _ensure_pointer(job, repo_path, artifact_dir)
+    inbox_dir = artifact_dir / "inbox"
+    inbox_dir.mkdir(parents=True, exist_ok=True)
+
+    import json as _json
+    packet = {
+        "mesh": {
+            "enabled": True,
+            "cluster_name": cluster,
+            "node_id": node_id,
+            "role": "worker",
+        },
+        "job": {
+            "job_id": job["job_id"],
+            "type": "same_file_review_assist",
+            "priority": job.get("priority", "P4"),
+            "repo": job.get("repo", ""),
+            "pr_number": int(job.get("pr_number", 0)),
+            "base_branch": job.get("base_branch", "main"),
+            "head_branch": job.get("head_branch", ""),
+            "source_url": job.get("source_url", ""),
+            "objective": job.get("objective", ""),
+            "blocked_job_id": job.get("blocked_job_id", ""),
+            "owner_job_id": job.get("owner_job_id", ""),
+            "owner_worker_id": job.get("owner_worker_id", ""),
+            "locked_paths": _json.loads(job.get("locked_paths", "[]")),
+            "owner_artifact_dir": job.get("owner_artifact_dir", ""),
+            "mode": "read_only",
+        },
+        "constraints": {
+            "read_only": True,
+            "may_not_edit_locked_paths": True,
+            "advisory_artifacts_only": True,
+        },
+    }
+
+    (inbox_dir / "job.json").write_text(_json.dumps(packet, indent=2))
+    logger.info("Wrote advisory inbox for job=%s", job["job_id"])
 
 
 def _read_outbox_status(
