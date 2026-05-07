@@ -7,6 +7,8 @@
 # Don't let errors kill this hook — it's advisory
 set +e
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
+
 HOOK_JSON=$(cat)
 
 # --- Parse file_path ---
@@ -73,9 +75,17 @@ if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ] && [ -f "${CLAUDE_PLUGIN_ROOT}/skills/prforg
   SKILL_ROOT="${CLAUDE_PLUGIN_ROOT}/skills/prforge"
 fi
 
-# 2. Try to find via filesystem search
+# 2. Try repository/plugin layout relative to this hook.
+if [ -z "$SKILL_ROOT" ] && [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/../skills/prforge/phases/${PLAYBOOK}" ]; then
+  SKILL_ROOT="$(cd "$SCRIPT_DIR/../skills/prforge" 2>/dev/null && pwd)"
+fi
+
+# 3. Optional bounded filesystem search for nonstandard local installs.
 if [ -z "$SKILL_ROOT" ]; then
-  FOUND=$(find "$HOME" -path "*/skills/prforge/phases/${PLAYBOOK}" -type f 2>/dev/null | head -1)
+  FOUND=""
+  if [ "${PRFORGE_PHASE_INJECTOR_ALLOW_HOME_SCAN:-0}" = "1" ]; then
+    FOUND=$(find "$HOME" -maxdepth 6 -path "*/skills/prforge/phases/${PLAYBOOK}" -type f 2>/dev/null | head -1)
+  fi
   if [ -n "$FOUND" ]; then
     SKILL_ROOT=$(dirname "$FOUND")
     SKILL_ROOT=$(dirname "$SKILL_ROOT")  # go up from phases/ to skills/prforge/
@@ -102,8 +112,8 @@ if [ -n "$SKILL_ROOT" ] && [ -f "$SKILL_ROOT/phases/$PLAYBOOK" ]; then
 else
   echo "MANDATORY: Find and read the phase playbook for $NEW_PHASE before proceeding."
   echo ""
-  echo "  Run this to locate it:"
-  echo "  find \"\$HOME\" -path \"*/skills/prforge/phases/$PLAYBOOK\" -type f | head -1"
+  echo "  Expected relative path: skills/prforge/phases/$PLAYBOOK"
+  echo "  Set CLAUDE_PLUGIN_ROOT if this plugin is installed outside the repository."
   echo ""
   echo "Then read that file completely before taking any further action."
   echo "The playbook contains required steps and a PHASE EXIT GATE checklist."

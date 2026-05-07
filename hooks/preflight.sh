@@ -44,12 +44,17 @@ if [ -f "$HOME/.prforge-mesh/sessions/local/$(prforge_get_session_id 2>/dev/null
   fi
 
   if [ "$RUN_CHECK" = true ]; then
-    MESH_SCRIPTS=$(find "$HOME" -path "*/prforge/*/scripts/mesh" -type d 2>/dev/null | head -1)
+    MESH_SCRIPTS=""
+    if [ -d "$SCRIPT_DIR/../scripts/mesh" ]; then
+      MESH_SCRIPTS="$(cd "$SCRIPT_DIR/../scripts/mesh" 2>/dev/null && pwd)"
+    elif [ -n "${CLAUDE_PLUGIN_ROOT:-}" ] && [ -d "$CLAUDE_PLUGIN_ROOT/scripts/mesh" ]; then
+      MESH_SCRIPTS="$CLAUDE_PLUGIN_ROOT/scripts/mesh"
+    fi
     if [ -n "$MESH_SCRIPTS" ]; then
       SID=$(prforge_get_session_id 2>/dev/null || echo "")
       if [ -n "$SID" ]; then
-        if ! python3 "$MESH_SCRIPTS/meshctl.py" health --session "$SID" 2>/dev/null; then
-          if python3 "$MESH_SCRIPTS/meshctl.py" heal --session "$SID" 2>/dev/null; then
+        if ! timeout 5s python3 "$MESH_SCRIPTS/meshctl.py" health --session "$SID" 2>/dev/null; then
+          if timeout 10s python3 "$MESH_SCRIPTS/meshctl.py" heal --session "$SID" 2>/dev/null; then
             echo "Mesh was stale. Restarted node. Continuing."
           fi
         fi

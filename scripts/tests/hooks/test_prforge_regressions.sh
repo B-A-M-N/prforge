@@ -61,6 +61,11 @@ if grep -R "hook_events.log" "$ROOT/hooks" >/dev/null 2>&1; then
 fi
 pass "hooks avoid repo-local diagnostic event writes"
 
+if grep -n 'find "$HOME" -path' "$ROOT/hooks/preflight.sh" "$ROOT/hooks/phase-injector.sh" >/dev/null 2>&1; then
+  fail "preflight or phase injector still performs unbounded HOME scans"
+fi
+pass "hot-path hooks avoid unbounded HOME scans"
+
 QUIET_REPO="$TMP/quiet-repo"
 mkdir -p "$QUIET_REPO"
 git -C "$QUIET_REPO" init -q
