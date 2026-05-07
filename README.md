@@ -1,801 +1,468 @@
-# PRForge
+# PRForge (v1.5.0) — The Master Engineering Specification
 
 **Professional PR contribution harness for Claude Code.**
 
-PRForge turns the agent into a disciplined upstream contributor. It enforces repo
-intelligence, scope contracts, validation honesty, and git safety before any
-upstream-facing action through a multi-layered constraint system.
-
-**Audit note:** This is a redirective enforcement system — when the model goes off-track,
-it's redirected back to the correct phase with a clear recovery path, rather than
-simply blocked. This produces high-margin behavior for well-aligned models,
-with some gaps documented in "Known Limitations" below.
-
-## The Model
-
-**Delegated execution with guarded release.**
-
-```
-You give it:  repo name / issue link / PR link / review link / task description
-It does:      investigate → plan → patch → validate → self-review → package
-It returns:   "Here is exactly what I changed and what you are approving."
-You approve:  push / comment / create PR
-```
-
-The agent handles the full local workflow autonomously. It only stops for your
-approval when the result is about to become public or irreversible.
+PRForge is a multi-agent orchestration and safety harness that transforms Claude Code into a disciplined upstream contributor. It enforces repository intelligence, scope contracts, validation honesty, and git safety through a multi-layered mechanical enforcement system consisting of **11 canonical phases**, **13 repair states**, **10+ deterministic shell hooks**, and **3 background monitors**.
 
 ---
 
-## Quick Start
+## 1. System Vision & Behavioral Model
 
-```bash
-# Find contribution candidates in a repo
-"find PR candidates in fastapi/fastapi"
+PRForge operates on the **Gate-Scoped Autonomy** model. The agent is granted autonomy within a defined "capability envelope" per phase, but every tool call is intercepted by shell hooks to ensure alignment with repository intelligence and the PR contract.
 
-# Fix a GitHub issue
-/pr https://github.com/org/repo/issues/123
+### 1.1 Redirective Enforcement
+Unlike prohibitive guardrails that simply block actions, PRForge **redirects** the agent. If a gate is violated (e.g., editing a file not in the contract), the system provides a JSON-based recovery path (a "Repair State") that instructs the agent on how to return to a valid state.
 
-# Address review feedback on your PR
-/pr https://github.com/org/repo/pull/456
-
-# Resume a blocked or interrupted run
-/pr-continue
-
-# Approve and ship (verifies integrity hashes first)
-/pr-approve
-```
+### 1.2 The "Total Blueprint" Mandate
+This document represents a total technical map of the PRForge system. No detail from the codebase—from the atomic Redis-Lua leases to the granular phase-exit gates and RAG risk scoring—is omitted.
 
 ---
 
-## What It Does
+## 2. Capability Reference (Functional Overview)
 
-1. **Finds PR candidates** — given a repo name, fetches open issues, classifies them by type (bug, auth/oauth, integration, docs, perf, refactor, test, etc.), scores each by achievability (scope clarity, maintainer consensus, local testability, repo responsiveness, not-claimed), and presents ranked options grouped by category. Waits for your selection. Topic area (auth, oauth, etc.) is never a reason to avoid a candidate — complexity and unresolved decision-making are.
-
-2. **Understands the repo before touching code** — GitNexus MCP for symbol graph/blast radius (`query`, `context`, `impact`, `detect_changes`), `gh` CLI for PR/issue history and CI status, firecrawl skill for external docs and rendered CONTRIBUTING.md. Falls back to `rg`/`git log`/`gh` and records exactly which capabilities were unavailable.
-
-3. **Decomposes review feedback completely** — every reviewer concern is fetched, classified (blocker / required_change / maintainer_preference / scope_reduction / optional_suggestion / misunderstanding / needs_user_decision / already_addressed), and tracked as a required gate. Nothing gets left unaddressed. Ambiguous items are surfaced in the approval artifact for your decision — never auto-fixed.
-
-4. **Creates a PR Contract before any edits** — objective, required outcomes, allowed files, forbidden files/actions, and a validation plan with exact commands. Edits outside the contract are immediately classified as scope delta by the Write hook and must be reverted or the contract/DoD regenerated before validation or approval can proceed.
-
-5. **Generates a tamper-proof Definition of Done** — written at PLAN time from the contract and patch plan, hashed immediately. Every item is issue-specific and concrete (names exact files, functions, test commands). At approval, each checked item must have corroborating evidence in `git diff`, `validation_ledger.md`, or `review_decomposition.md`. If `dod.md` was edited after generation, the entire run is invalidated.
-
-6. **Enforces plan compliance** — at end of IMPLEMENT, compares actual `git diff` against `patch_plan.md`. Planned files not touched: finish the work. Files touched outside the plan: remove or update the contract first, then continue.
-
-7. **Handles incidental fixes correctly** — if the agent finds a clearly broken thing while working, it fixes it in a separate commit, labels it `## Additional Fix` in the PR body. Refactors, cleanup, and "while I'm here" improvements are deferred to `hostile_review.md` and left alone.
-
-8. **Writes missing tests itself** — missing tests are not escalated to you; the agent creates them following repo patterns. Only escalates if the test environment requires production data, secrets, or infrastructure unavailable locally.
-
-9. **Runs real validation** — no fake test claims, no "should pass." Either ran and passed, or not run with a documented reason. Every changed source file must have test coverage or a written justification.
-
-10. **Self-reviews hostilely** — audits its own diff as if trying to reject it before the maintainer can. Scope, correctness, alternate code paths, test quality, commit hygiene, artifact exclusion.
-
-11. **Generates maintainer-grade PR descriptions** — honest validation records, scope boundaries, risk notes. No "Generated by Claude" anywhere.
-
-12. **Triages review comments and drafts professional responses** — no defensiveness, no over-explaining, no arguing. Acknowledge, fix, move on.
-
-13. **Blocks unsafe git actions** — blind push, force-push without approval, pushing to upstream instead of fork, pushing while approval is stale.
-
-14. **Verifies approval integrity** — SHA256 hashes of diff, validation ledger, approval.md, and dod.md recorded at approval time. `/pr-approve` verifies all four before executing anything. If the code changed, approval is stale and regenerated. If dod.md was edited, the entire run restarts from PLAN.
-
-15. **Checks review freshness** — re-fetches PR comments and CI status before packaging. If new reviewer comments or new check failures appeared since the last fetch, returns to INVESTIGATE to classify them.
-
-16. **Classifies CI/check status** — distinguishes checks that are related to changed files vs. unrelated pre-existing failures. Surfaces pending checks. Never buries a related failure.
-
-17. **Detects branch/base drift** — verifies the working branch is still based on the expected upstream base before any edits. Classifies: current / behind but safe / diverged needs rebase / wrong base.
-
-18. **Enforces commit hygiene** — `commit-msg` hook (auto-installed in Phase 0) blocks: `Co-authored-by: Claude/Opus/Sonnet/Haiku/Anthropic`, "Generated by Claude", AI-assisted footers, WIP/debug/temp/fixup commit names. `pre-commit` hook independently blocks staged `.prforge/` artifacts. Commits must use the configured human Git identity (`git config user.name`/`user.email`). `gh api user` is used for GitHub ownership and PR checks only — these are separate identities.
-
-19. **Auto-excludes `.prforge/` from git** — writes `.prforge/` to `.git/info/exclude` on every Phase 0 activation. Pre-commit hook independently blocks staged `.prforge/` artifacts at commit time.
-
-20. **Computes approval status** — `READY_TO_SHIP` / `READY_WITH_WARNINGS` / `BLOCKED` based on validation results, CI classification, scope cleanliness, review freshness, test coverage, and DoD evidence.
-
-21. **Previews exact public text** — the precise PR body or review response that will be posted is visible in the approval artifact before you approve. No surprises.
+1.  **Finds PR candidates** — fetches open issues, classifies them by type, and scores them by achievability (Scope size, Testability, Maintainer responsiveness, "Not Claimed").
+2.  **Understands the repo before touching code** — GitNexus MCP for symbol graph/blast radius (`query`, `context`, `impact`, `detect_changes`) OR context-mode MCP (`search_codebase`, `find_references`, `run_tests`).
+3.  **Decomposes feedback** — fetches and classifies EVERY reviewer concern (blocker, required_change, maintainer_preference, scope_reduction, optional_suggestion, misunderstanding, needs_user_decision, already_addressed).
+4.  **Creates a PR Contract** — defines objective, required outcomes, allowed files, forbidden files/actions, and a validation plan with exact commands.
+5.  **Generates Tamper-Proof DoD** — issue-specific checklist, hashed at PLAN time; evidence-verified at approval.
+6.  **Enforces Plan Compliance** — at IMPLEMENT end, compares actual `git diff` against `patch_plan.md`.
+7.  **Handles Incidental Fixes** — separates clearly broken items into their own commits; labels as `## Additional Fix` in the PR body.
+8.  **Writes Missing Tests** — autonomously creates tests following repo patterns; only escalates on production-infrastructure requirements.
+9.  **Runs Real Validation** — no fake claims. Every changed source file must have test coverage or a written justification in the `validation_ledger.md`.
+10. **Self-Reviews Hostilely** — audits its own diff using a 10-question checklist for correctness, scope, hygiene, and artifact exclusion.
+11. **Generates Maintainer-Grade Responses** — drafts PR bodies and review responses without AI attribution.
+12. **Blocks Unsafe Git Actions** — prevents pushes to upstream, blind force-pushes, and WIP commits.
+13. **Verifies Approval Integrity** — SHA256 hashes of diff, validation ledger, approval.md, and dod.md verified at SHIPPED time.
+14. **Learns from Every PR** — automated `postmortem.json` generation and SQLite memory indexing (FTS5).
+15. **Checks Review Freshness** — re-fetches comments and CI status before packaging; returns to INVESTIGATE if stale.
+16. **Classifies CI Status** — distinguishes related check failures from pre-existing noise.
+17. **Detects Branch Drift** — verifies the working branch is based on the expected upstream base before edits.
+18. **Enforces Commit Hygiene** — blocks `Co-authored-by: Claude`, AI bylines, and WIP/debug commits.
+19. **Auto-Excludes Artifacts** — writes `.prforge/` to `.git/info/exclude` automatically in Phase 0.
+20. **Computes Approval Status** — `READY_TO_SHIP`, `READY_WITH_WARNINGS`, or `BLOCKED` based on validation and scope cleanliness.
+21. **Previews Public Text** — exact posted text visible in the approval artifact before post.
 
 ---
 
-## Implicit Activation
+## 3. Visual Architecture
 
-PRForge activates from a `/pr` command, natural language trigger phrases, or pasted GitHub links. **No explicit command needed.**
-
-If you paste a PR link that has review comments on it, PRForge automatically activates in `review_response` mode. It identifies you via `gh api user`, confirms PR ownership, and goes to work collecting every reviewer concern.
-
----
-
-## Candidate Discovery
-
-Point it at one or more repos — no issue link needed:
-
-```
-"find PR candidates in rust-lang/rust"
-"find good first issues in fastapi/fastapi"
-"what oauth issues are open in supabase/supabase"
-```
-
-The agent:
-1. Fetches open issues with `gh issue list` — filters by label, recency, and maintainer engagement
-2. Classifies each issue by PR type
-3. Scores each by achievability
-4. Checks repo health signals (CONTRIBUTING.md exists, recent merged PRs, maintainer response rate)
-5. Filters out claimed, stale, blocked, or decision-dependent issues
-6. Presents ranked candidates grouped by type
-
-**PR types classified:**
-
-| Type | Signal words / labels |
-|------|-----------------------|
-| `bug` | "fix", "broken", "regression", "error", "crash" |
-| `feature` | "add", "support", "implement", enhancement label |
-| `docs` | "docs", "readme", "example", documentation label |
-| `auth/oauth` | "auth", "oauth", "token", "credential", "permission" |
-| `integration` | "integration", "provider", "plugin", "connector" |
-| `test` | "test", "coverage", "spec" |
-| `perf` | "slow", "performance", "optimize", "memory" |
-| `refactor` | "cleanup", "simplify", "extract", "decouple" |
-| `type/lint` | type errors, lint warnings, TypeScript |
-
-**Achievability scoring:**
-- Scope size — how many files would realistically change
-- Testability — can the fix be validated locally without a live environment
-- Maintainer acceptance — ≥1 maintainer comment agreeing the issue is valid
-- Dependency risk — does it touch deps, public APIs, or auth paths
-- Reproducibility — can the bug/behavior be reproduced from the description alone
-- Repo responsiveness — recent merged PRs = active maintainer
-- Not claimed — no assignee, no recent "I'll work on this" comment
-
-**Example output:**
-```
-## Bug Fixes
-  ✅ BEST  #N — [Title]
-    One isolated function, clear repro. Maintainer confirmed valid. ~2 files, testable locally.
-
-  ⚠️  RISKY #N — [Title]
-    Touches auth path. Maintainer hasn't responded in 3 months.
-
-## Auth/OAuth
-  ✅ BEST  #N — [Title]
-    Token refresh error path. Maintainer left a hint. Existing test suite covers the area.
-
-  🚫 AVOID #N — [Title]
-    Requires product decision on token storage architecture. Unresolved maintainer debate.
-
-## Integration
-  ✅ BEST  #N — [Title]
-    New provider following an existing pattern (3 similar PRs merged). Template to copy.
-
-## Docs
-  ✅ EASY  #N — [Title]
-    Missing example in README. Zero code risk.
-```
-
-Waits for your selection. Does not auto-pick. After selection, transitions to the full `/pr` workflow starting at INTAKE.
-
----
-
-## Architecture
-
-PRForge operates in two modes: **Standalone** and **Distributed Mesh**.
-
-### Standalone Architecture
-
+### 3.1 Standalone Lifecycle
 ```mermaid
-graph LR
+graph TD
     U[User] -->|"/pr link" / paste URL| CC[Claude Code<br/>PRForge Skill]
     CC --> PH[Phase State Machine]
-    PH -->|1| I[INTAKE<br/>Normalize input]
-    PH -->|2| INV[INVESTIGATE<br/>Repo intelligence]
-    PH -->|3| PL[PLAN<br/>Contract + DoD]
-    PH -->|4| IM[IMPLEMENT<br/>Edit + test]
-    PH -->|5| V[VALIDATE<br/>Run & record]
-    PH -->|6| SR[SELF_REVIEW<br/>Hostile audit]
-    PH -->|7| PK[PACKAGE<br/>Generate artifacts]
-    PH -->|8| AP[APPROVAL<br/>Wait for user]
-    AP -->|User approves| S[SHIPPED<br/>Push/Post/PR]
+    subgraph Phases ["11-Phase Pipeline"]
+        I[INTAKE] --> INV[INVESTIGATE]
+        INV --> PL[PLAN]
+        PL --> IM[IMPLEMENT]
+        IM --> V[VALIDATE]
+        V --> SR[SELF_REVIEW]
+        SR --> PK[PACKAGE]
+        PK --> AP[APPROVAL]
+        AP -->|User approves| S[SHIPPED]
+        S --> PM[POSTMORTEM]
+        PM --> MI[MEMORY_INDEX]
+        MI --> C[COMPLETE]
+    end
     CC -->|PreToolUse| HL[Hooks<br/>preflight / phase-boundary]
     CC -->|PostToolUse| IG[Intelligence<br/>GitNexus / gh CLI]
     CC -->|PostToolUse| BR[Blast Radius<br/>scope tracking]
+    PM -->|Lessons| ML[(Memory Ledger<br/>SQLite + FTS5)]
+    ML -->|Injection| I
 ```
 
-### Standalone Components
-
-```
-PRForge Standalone = 1 skill + Core commands + 4 hooks
-```
-
-| Component | Location | Purpose |
-|-----------|----------|---------|
-| **Skill** | `skills/prforge/SKILL.md` | Main workflow engine, state machine, all guardrails, phase instructions |
-| **Commands** | `commands/` | `/pr`, `/pr-continue`, `/pr-approve`, etc. |
-| **PreToolUse Hook** | `hooks/preflight.sh` | Fires before every `Bash` call; blocks unsafe git push/PR actions; enforces guards at the shell level independent of the skill |
-| **PostToolUse Hook (Read)** | `hooks/gitnexus-intelligence.sh` | Fires after every Read/Grep/Glob; cache-aware; auto-discovers MCP servers; writes tool instructions to `repo_intelligence.md`; records capability gaps |
-| **PostToolUse Hook (Write/Edit)** | `hooks/blast-radius.sh` | Fires after every Write/Edit; computes blast radius (files changed vs contract, test coverage ratio, dependency depth, public API surface); updates `state.json` |
-| **PostToolUse Hook (Write/Edit)** | `hooks/phase-injector.sh` | Fires after state.json writes; injects mandatory reminder to read the new phase playbook |
-| **PreToolUse Hook (Write)** | `hooks/phase-boundary.sh` | Fires before every Write; blocks illegal phase transitions in `state.json` |
-| **Pre-Commit Hook** | `hooks/pre-commit.sh` | Auto-installed in Phase 0; blocks staged `.prforge/` artifacts and debug files |
-| **Commit-Msg Hook** | `hooks/commit-msg.sh` | Auto-installed in Phase 0; blocks AI co-author trailers, AI-generated footers, WIP/debug/temp commit names |
-
-### Distributed Mesh Components (MVP)
-
-A distributed wrapper around standalone PRForge that coordinates work across multiple machines using Redis, without altering the standalone workflow.
-
-| Component | Location | Purpose |
-|-----------|----------|---------|
-| **Coordinator** | `scripts/mesh/coordinator.py` | Dispatch loop: node discovery, lease acquire, job assignment |
-| **Auditor** | `scripts/mesh/auditor.py` | GitHub polling loop: PR detection, cursor tracking, job enqueue |
-| **Worker** | `scripts/mesh/worker.py` | Heartbeat loop: inbox write, phase reporting, lease renewal |
-| **Manager** | `scripts/mesh/manager.py` | Manager Mode: certification, authority gating, public action control |
-| **Policy Engine** | `scripts/mesh/policy_engine.py` | Deterministic + adaptive policy decision engine |
-| **Intel Engine** | `scripts/mesh/intel_engine.py` | RAG-based fastembed system (embeddings + reranking) to detect subtle risk signals from artifacts |
-| **Mesh Signing** | `scripts/mesh/mesh_signing.py` | HMAC-SHA256 artifact signing and verification for distributed mode |
-| **DB Backend** | `scripts/mesh/db_backend.py` | Database abstraction: SQLite3 default for local/standalone (auto-creates `~/.prforge-intel/index/metadata.sqlite`, works out-of-the-gate); hooks ready for PostgreSQL/pgvector in distributed mesh (requires setup) |
-| **Redis Backend** | `scripts/mesh/redis_backend.py` | Redis Streams job queue, heartbeats, leases, and state |
-
-#### Distributed CLI Agent Model
-
-Distributed Mesh mode is not a hidden worker pool and does not spawn invisible LLM agents. A PRForge Mesh is expected to run as visible Claude Code CLI sessions on each participating machine:
-
-| Machine | Visible CLI Role | Writes Source? | Primary Responsibility |
-|---------|------------------|----------------|------------------------|
-| PC1 | Watchtower / Auditor / Coordinator | No | Poll GitHub, audit review/CI changes, classify jobs, approve dispatch decisions |
-| PC2 | Forge Worker A | Yes, within contract | Execute assigned PRForge implementation/review-response/CI-fix jobs |
-| PC3 | Forge Worker B | Yes, within contract | Execute assigned PRForge implementation/review-response/CI-fix jobs |
-
-The Python mesh daemons manage Redis streams, node discovery, leases, heartbeats, inbox/outbox files, queue state, and schema validation. They do not replace the visible Claude Code agents. Semantic work is performed by the role-loaded Claude Code CLI agent on that machine. The canonical job payload lives in Redis and/or the local mesh inbox. PTY nudging may be used only to wake a visible CLI session and tell it that a job is available. PTY text is never the source of truth for a job.
-
-### Distributed Architecture (3 PCs, 1 Claude Code instance each)
-
+### 3.2 Distributed Mesh (LAN)
 ```mermaid
 graph LR
-    subgraph PC1 ["PC1 — Coordinator / Auditor (Claude Code)"]
-        C[coordinator.py<br/>Dispatch loop]
-        A[auditor.py<br/>GitHub polling]
-        M[manager.py<br/>Certification]
+    subgraph PC1 ["Watchtower (Coordinator / Auditor)"]
+        C[coordinator.py]
+        A[auditor.py]
+        M[manager.py]
     end
-
-    subgraph PC2 ["PC2 — Worker A (Claude Code)"]
-        W1[worker.py<br/>Heartbeat + inbox]
+    subgraph Workers ["Forge Workers"]
+        W1[worker.py]
+        W2[worker.py]
     end
-
-    subgraph PC3 ["PC3 — Worker B (Claude Code)"]
-        W2[worker.py<br/>Heartbeat + inbox]
-    end
-
-    R[("Redis<br/>Streams + Leases<br/>Heartbeats + Queue")]
-
-    A -->|"poll GitHub"| GH[GitHub API]
-    A -->|"enqueue job"| R
+    R[("Redis<br/>Streams + Leases<br/>Heartbeats")]
+    A -->|"poll GH"| GH[GitHub API]
+    A -->|"enqueue"| R
     C -->|"dispatch"| R
-    C -->|"assign job"| W1
-    C -->|"assign job"| W2
-    W1 -->|"lease + status"| R
-    W2 -->|"lease + status"| R
-    W1 -->|"submit artifacts"| R
-    W2 -->|"submit artifacts"| R
-    C -->|"audit"| A
+    C -->|"assign"| Workers
+    Workers -->|"leases"| R
     C -->|"certify"| M
-    M -->|"verdict"| C
-    C -->|"revision / approval"| W1
-    C -->|"revision / approval"| W2
-```
-
-Job flow:
-1. **PC1 (Coordinator/Auditor)** — Claude Code runs `prforge` skill in coordinator/auditor mode. `auditor.py` polls GitHub, enqueues jobs to Redis. `coordinator.py` dispatches jobs to workers. `manager.py` certifies completed work.
-2. **PC2 (Worker A)** — Claude Code runs `prforge` skill in worker mode. `worker.py` picks up jobs from Redis, executes full PRForge pipeline (INTAKE→…→APPROVAL), submits artifacts.
-3. **PC3 (Worker B)** — Same as PC2. Runs independent Claude Code worker session.
-
-All inter-machine coordination goes through **Redis** (Streams, leases, heartbeats, job queue). Python daemons handle the plumbing; Claude Code agents handle the semantic work.
-
-### Monitors
-
-PRForge uses background monitors to watch session and mesh state. Monitors are declared in `monitors/monitors.json` and auto-start when the `prforge` skill is invoked.
-
-| Monitor | Location | Purpose |
-|---------|----------|---------|
-| **local-watch** | `monitors/local-watch.sh` | Consistency sentinel: git drift, dirty worktree, review updates, approval integrity, branch upstream, hook health, context pressure |
-| **distributed-worker-watch** | `monitors/distributed-worker-watch.sh` | Worker state: assigned jobs, lease renewal, coordinator directives, revision jobs |
-| **distributed-coordinator-watch** | `monitors/distributed-coordinator-watch.sh` | Coordinator state: worker heartbeats, queue depth, stale leases, signoff state, auditor verdicts, reviewer dispatch |
-
-Monitors emit `PRFORGE_EVENT` notifications classified as `INFO`, `WARNING`, or `BLOCKER`. See SKILL.md for the full event classification table.
-
-### Manager Mode (Distributed)
-
-When Manager Mode is enabled in distributed mesh, an additional policy layer governs what actions can execute automatically:
-
-| Authority Level | Public Actions Allowed |
-|----------------|------------------------|
-| `certify_only` | None — may only certify/notify, no public actions |
-| `internal_actions` | None — may requeue/block/revalidate/release leases/certify, no public actions |
-| `low_risk_public` | `push`, `comment`, `request_review` only (never `force_push`, `merge`, `delete_branch`) |
-
-Manager Mode requires all verdicts: `coordinator_verdict.json`, `auditor_verdict.json`, `manager_verdict.json`. For `low_risk_public`, `mesh_certification.json` is also required and its hashes are verified against current state.
-
-### Hook-Driven Automation
-
-**Intelligence is automatic.** After every read operation, the hook fires and writes MCP tool instructions to `.prforge/repo_intelligence.md`. The agent reads this file and follows the instructions to call the appropriate tools.
-
-**Intelligence source priority:**
-
-| Source | What it provides | Notes |
-|--------|-----------------|-------|
-| **GitNexus MCP** (`mcp__gitnexus__*`) | `query` — hybrid search; `context` — 360° symbol view; `impact` — blast radius; `detect_changes` — diff→symbol mapping | Configured via `~/.claude/mcp.json` or `~/.mcp.json` |
-| **context-mode MCP** | `search_codebase`, `find_references`, `find_definition`, `run_tests`, `typecheck`, `lint`, `git_*` | Replaces raw `rg`/`find`/test commands |
-| **gh CLI** | PR reviews, comments, CI checks, issues, maintainer responses | Authenticated; always available |
-| **firecrawl skill** | External docs, rendered CONTRIBUTING.md, library changelogs | Invoked via Agent tool with `skill: "firecrawl"`; used for external URLs, not GitHub pages |
-| **Local fallback** | `rg`, `find`, `git log`, `package.json` scripts | Always available; used when MCP unavailable |
-
-MCP servers are auto-discovered at runtime. The hook checks `~/.claude/settings.json`, `~/.claude/mcp.json`, `~/.mcp.json`, `~/.claude.active*/mcp.json`, and `$REPO_ROOT/.mcp.json`. No code changes needed when adding or removing MCP servers.
-
-When GitNexus is unavailable, the hook records exactly which capabilities were missed in `state.intelligence.unavailable_capabilities` and sets `minimum_risk_floor` to `medium`.
-
-**Blast radius is automatic.** After every file edit, the hook computes:
-- Files changed vs contract allowed files → detects scope creep
-- Test coverage ratio → changed files with tests / total changed files
-- Dependency depth → files that import changed files (shallow scan; uses context-mode `find_references` if available)
-- Public API surface touched → exported functions, types, constants changed
-- Overall score: `low` / `medium` / `high`
-
-Results feed into the scope delta check, SELF_REVIEW gates, and approval status computation.
-
-### Coding Discipline Enforcement
-
-PRForge enforces coding discipline through mandatory phase gates, not optional guidelines.
-
-**Companion plugins are optional inputs. PRForge policy gates are mandatory outputs.**
-
-| Scenario | Enforcement |
-|-----------|-------------|
-| `andrej-karpathy-skills` is installed | PRForge MUST treat its coding-discipline rules as mandatory phase gates. PLAN, IMPLEMENT, SELF_REVIEW, and PACKAGE must reference and satisfy them. Failure BLOCKS phase exit or REDIRECTS to recovery. |
-| `andrej-karpathy-skills` is not installed | PRForge MUST use its built-in `policies/coding-discipline.md` fallback. The fallback enforces the same behavioral requirements. Absence of the external plugin MUST NOT weaken PRForge enforcement. |
-
-**Mandatory gates:**
-- PLAN cannot complete unless `coding_discipline.md` exists and is satisfied.
-- IMPLEMENT cannot complete unless changed files comply with the discipline contract.
-- SELF_REVIEW cannot complete unless the discipline audit passes.
-- PACKAGE cannot produce `approval.md` unless the discipline verdict is PASS or WARNING with justification.
-- APPROVAL cannot proceed if discipline status is BLOCKED.
-
-**For distributed mesh:**
-- Workers submit `discipline_report.json` with every job.
-- Coordinator/auditor rejects or requeues work if the report is missing, stale, or BLOCKED.
-- The external plugin is NOT the source of truth; PRForge artifacts are the source of truth.
-
-**The discipline rules (whether from companion plugin or built-in fallback) enforce:**
-- Think before coding; state assumptions and success criteria.
-- Prefer simplicity; the smallest correct fix over architectural cleanup.
-- Make surgical changes; avoid wide refactoring unrelated code.
-- Keep changes goal-driven; every edited line must map to the task.
-
----
-
-### Task Types & Modes
-
-| Task Type | Trigger | Mode File | Key Behavior |
-|-----------|---------|-----------|-------------|
-| `review_response` | PR link with review comments | `modes/review_response.md` | Mandatory review collection: fetch ALL reviews, classify EVERY concern, address all required items |
-| `new_pr` | Issue link, or "fix this PR" (others' PR) | `modes/new_pr.md` | Fetch issue details, analyze root cause, generate PR body |
-| `candidate_discovery` | "find PR candidates" | `modes/candidate_discovery.md` | Scan open issues, classify by type, score by achievability, present ranked candidates |
-| `pr_polish` | "clean up this PR" (own, no reviews) | `modes/pr_polish.md` | Hostile review of own PR, tighten body, add missing tests |
-| `ci_fix` | "fix CI", failing CI log | `modes/new_pr.md` | Fetch failing CI log, classify related/unrelated, fix root cause |
-| `local_task` | Local task description | `modes/new_pr.md` | Treat as local PR task |
-
----
-
-## Distributed Setup
-
-PRForge Mesh uses **Redis** as its coordination plane (job queue, leases, heartbeats, state). Workers connect to the coordinator-hosted Redis over an **SSH tunnel** — this is just the secure network path; Redis remains the coordination plane.
-
-### Prerequisites per machine
-
-| Machine | Prerequisites |
-|---------|---------------|
-| **PC1 (Coordinator/Auditor)** | Redis running locally (bind 127.0.0.1, requirepass set, appendonly yes), `gh` CLI authenticated, Python + redis-py + fastembed |
-| **PC2 / PC3 (Workers)** | SSH access to PC1 (`ssh user@coordinator-host`), Python + redis-py + fastembed, `gh` CLI authenticated, repo roots |
-
-### Step 1 — Set up PC1 (Coordinator / Auditor)
-
-```
-/pr-distributed coordinator,auditor
-```
-
-This creates:
-- `~/.prforge-mesh/config.json` (Redis local, roles: coordinator + auditor)
-- `~/.prforge-mesh/mesh.env`
-- systemd services: `prforge-coordinator.service`, `prforge-auditor.service`
-
-Then start:
-```bash
-systemctl --user enable --now prforge-coordinator.service
-systemctl --user enable --now prforge-auditor.service
-```
-
-Verify Redis is running with `requirepass` in `/etc/redis/redis.conf`:
-```
-bind 127.0.0.1
-protected-mode yes
-requirepass <your-password>
-appendonly yes
-```
-
-### Step 2 — Set up PC2 / PC3 (Workers)
-
-```
-/pr-distributed worker
-```
-
-This creates:
-- `~/.prforge-mesh/config.json` (Redis URL via SSH tunnel)
-- `~/.prforge-mesh/mesh.env`
-- `~/.config/systemd/user/prforge-redis-tunnel.service` (SSH tunnel to PC1)
-- `~/.config/systemd/user/prforge-worker.service`
-
-Then start:
-```bash
-systemctl --user enable --now prforge-redis-tunnel.service
-systemctl --user enable --now prforge-worker.service
-```
-
-The SSH tunnel (`prforge-redis-tunnel.service`) maps local port `6380` to `127.0.0.1:6379` on PC1, so the worker's Redis client connects securely to the coordinator's Redis.
-
-### Step 3 — Enable Manager Mode (optional)
-
-After setup, enable the policy layer on PC1:
-```
-/pr-distributed manager-mode low-risk-public
-```
-
-| Authority | What it allows |
-|-----------|----------------|
-| `certify-only` | Certify/notify only, no public actions |
-| `internal-actions` | Requeue/block/revalidate, no public actions |
-| `low-risk-public` | Push, comment, request_review (never force_push, merge, delete_branch) |
-
-### Step 4 — Check status
-
-```
-/pr-distributed status
 ```
 
 ---
 
-## Command Surface
+## 4. Command Reference (Exhaustive Reference)
 
-Core commands for the agent:
+### 4.1 Primary Workflow Commands
+*   **`/pr <target>`**: Primary entry point. Normalizes input, detects task type (`new_pr`, `review_response`, `pr_polish`, `ci_fix`, `candidate_discovery`), and initializes `state.json`.
+*   **`/pr-continue`**: Resumes work. Checks `inbox/job.json` (assigned mesh work) and `inbox/revision.json` (auditor requested fixes).
+*   **`/pr-approve`**: High-integrity release gate. Verifies HMAC-SHA256 signatures and artifact re-hashes to detect drift.
+*   **`/pr-rollback`**: Reset. Runs `git checkout .`, `git reset --hard HEAD`, and returns to the base branch.
 
-| Command | What it does |
-|---------|-------------|
-| `/pr <link-or-task>` | Start the full workflow. Handles everything through to the approval gate. |
-| `/pr-continue` | Resume after a blocker, failed validation, or interrupted run. |
-| `/pr-approve` | Verify all integrity hashes, then execute the approved action. |
-| `/pr-distributed <role>` | Set up distributed Mesh role: `worker`, `coordinator`, `auditor`, `coordinator,auditor` |
-| `/pr-distributed manager-mode <sub>` | Set Manager Mode: `off`, `certify-only`, `internal-actions`, `low-risk-public` |
-| `/pr-mesh-status` | Display the current status of the PRForge Mesh nodes and queues. |
-| `/pr-rollback` | Safely rollback a PRForge operation. |
+### 4.2 Distributed Mesh (Horizontal Scaling)
+*   **`/pr-distributed watchtower`**: Initializes PC1. Starts Redis (Port 6386) with auth and generates `mesh-secret`.
+*   **`/pr-distributed forge <host> <code>`**: Registers worker node. SSH tunnel (Port 6386) to watchtower.
+*   **`/pr-distributed manager-mode <level>`**: Sets authority: `off`, `certify_only`, `internal_actions`, `low_risk_public`.
+*   **`/pr-distributed status`**: Real-time cluster health, node heartbeats, and job counts.
+*   **`/pr-distributed off`**: Shuts down local mesh services and releases all active leases.
 
-The user never needs to drive individual phases. The agent runs the full pipeline and
-only surfaces for approval at the end.
+### 4.3 Vertical Mesh (Single-Machine Scaling)
+*   **`/pr-distributed-local coordinator`**: Starts a local Redis instance (Ports 6380-6385) for multiple agents on one box.
+*   **`/pr-distributed-local worker`**: Spawns a secondary worker with a unique ID and isolated worktree.
 
----
-
-## Triggering
-
-**Commands:**
-- `/pr <github-issue-url>` — fix this issue
-- `/pr <github-pr-url>` — address review feedback on this PR
-- `/pr <github-pr-url>#discussion_r...` — address a specific review thread
-- `/pr <task description>` — local task
-
-**Natural language (auto-detects intent, no command needed):**
-- "find PR candidates in org/repo"
-- "find good first issues in org/repo"
-- "review this PR" / "handle this review"
-- "prepare this PR" / "package this PR"
-- "respond to this maintainer comment"
-- "check if this is safe to push"
-- "fix this PR" / "clean up this PR" / "finish this PR"
-- "address requested changes"
-- "make this maintainer-grade"
-- "find low-risk contribution candidates"
-
-**GitHub links (auto-detected):**
-- `https://github.com/org/repo/issues/123` → `new_pr` mode
-- `https://github.com/org/repo/pull/456` → ownership check → `review_response` or `pr_polish`
-- `https://github.com/org/repo/pull/456#discussion_r...` → `review_response` mode
-- `https://github.com/org/repo/compare/...` → diff mode
-- `https://github.com/org/repo/commit/...` → commit mode
-
-**Implicit trigger:**
-Paste a GitHub PR link → PRForge checks for reviews (`gh pr view --json reviews`) → if review comments exist and the PR is yours → auto-activates in `review_response` mode without a command. Identifies you via `gh api user --jq '.login'`. Collects every single reviewer concern.
+### 4.4 Engineering Memory Commands
+*   **`/pr-memory status`**: DB stats (Runs, Artifacts, Events, Postmortems).
+*   **`/pr-memory search --query <Q>`**: FTS5 search over evidence-backed lessons.
+*   **`/pr-memory audit`**: Validates records and recurrence counters (active if >= 2).
+*   **`/pr-memory index --postmortem <P>`**: Manually ingests postmortem analysis into the ledger.
+*   **`/pr-memory recall --repo <R>`**: Displays preflight lessons injected during INTAKE.
 
 ---
 
-## State Machine
+## 5. The 11-Phase Lifecycle (Quality Gates)
 
-```
-INTAKE → INVESTIGATE → PLAN → IMPLEMENT → VALIDATE → SELF_REVIEW → PACKAGE → APPROVAL
-                                                                                  ↓
-                                                                               SHIPPED
-```
+Transitions are gated by `hooks/phase-boundary.sh`. Illegal transitions (e.g., IMPLEMENT→APPROVAL) are hard-blocked.
 
-Each phase has mandatory entry criteria, exit criteria, and blockers. The agent cannot skip phases unless you explicitly invoke an emergency override (recorded in `override.md`). Phases redirect (fix and continue) before escalating to the user.
+### 5.1 canonical Phase Pipeline & Quality Gates
 
-| Phase | What happens | User sees |
-|-------|-------------|-----------|
-| **INTAKE** | Normalize input. Identify user. Detect repo, remotes, branch, intelligence mode, ownership. Safety snapshot. Auto-install pre-commit hook. Auto-exclude `.prforge/`. | Brief acknowledgment |
-| **INVESTIGATE** | GitNexus + gh + local inspection. Build `repo_intelligence.md`. For review mode: fetch all review comments, classify every concern, fetch CI status. | Progress note |
-| **PLAN** | Write `contract.md`, `patch_plan.md`, and `dod.md`. Hash `dod.md` immediately. Record hash in `state.json`. | Progress note |
-| **IMPLEMENT** | Edit code within contract scope. Write missing tests. Plan compliance check. Separate incidental fixes into their own commits. | Progress note |
-| **VALIDATE** | Run validation plan. Record honest results in `validation_ledger.md`. | Progress note |
-| **SELF_REVIEW** | Hostile audit: scope, correctness, test quality, commit hygiene, artifact exclusion. Loop back to IMPLEMENT for any fixable finding. | Progress note |
-| **PACKAGE** | Review freshness check. Scope delta check. Generate `pr_body.md` / `review_response.md`. DoD evidence cross-reference. | Progress note |
-| **APPROVAL** | Compute approval status. Generate `approval.md` with DoD status table, public text preview, integrity fingerprint. Wait for your decision. | **Approval screen** |
-| **SHIPPED** | `/pr-approve` verifies all hashes, executes approved actions only. | Confirmation |
-| **BLOCKED** | Genuine blocker requiring user input. Presents what failed, what's wrong, next action. Does not dump logs. | Blocker screen |
+#### Phase 1: INTAKE
+*   **Responsibility**: Context normalization & Memory injection.
+*   **Entry Criteria**: Task type determined (new_pr, review_response, issue_fix, ci_fix, local_task, candidate_discovery); Repo identity confirmed (name, remotes, current branch); Intelligence mode detected (full_gitnexus / degraded_gh / degraded_local); `.prforge/` directory created; `.prforge/state.json` and `.prforge/task.json` written; Safety snapshot taken (`.prforge/snapshots/preflight.patch`).
+*   **Exit Criteria**: Task normalized into `task.json` with type, source_url, objective; Permissions set: edit/test/commit = true, push/post/force_push = false; If review_response: review comments fetched and decomposed.
+*   **Blockers**: Repo cannot be identified; Dirty tree contains unknown user edits; GitHub context cannot be fetched.
 
-### Phase Gate Rules
+#### Phase 2: INVESTIGATE
+*   **Responsibility**: Deep repo intelligence gathering.
+*   **Entry Criteria**: Repo intelligence gathered (files, tests, CI, conventions); Related files and tests identified; Prior related PRs/issues checked (GitNexus or gh).
+*   **Exit Criteria**: `.prforge/repo_intelligence.md` written; For review mode: `.prforge/review_decomposition.md` written with task queue; Risk areas identified.
+*   **Blockers**: No relevant files found; No test path exists and no source-level proof possible.
 
-- Cannot skip, compress, or merge phases
-- **Cannot commit/push after VALIDATE** — Passing tests ≠ permission to ship. SELF_REVIEW and PACKAGE must complete.
-- **Cannot push/post/create PR after PACKAGE** — Generating text ≠ permission. APPROVAL must complete.
-- **Cannot treat user silence/recap/summary as approval** — Must be explicit affirmative to approval question
-- **Cannot activate destructive workflow on ambiguous PR ownership** — Read-only mode first
+#### Phase 3: PLAN
+*   **Responsibility**: Scope contracting & DoD generation.
+*   **Entry Criteria**: `.prforge/contract.md` exists (objective, required outcomes, allowed/forbidden changes, validation plan); `.prforge/patch_plan.md` written with per-file edit plan; Allowed files list is specific; Validation plan includes actual commands.
+*   **Exit Criteria**: Contract and patch plan written; Scope boundaries clear; **`.prforge/dod.md` generated** with issue-specific, concrete, verifiable items (names specific files, functions, test commands; test items include exact command and expected pass count).
+*   **Blockers**: No minimal change path identified; No validation path exists; Contract is too broad; `dod.md` not generated or contains placeholder text.
 
----
+#### Phase 4: IMPLEMENT
+*   **Responsibility**: Surgical code edits & missing test creation.
+*   **Entry Criteria**: Code changes complete; All changed files within contract scope; No unrelated changes (formatting churn, dependency additions, scope creep); Each changed file has clear explanation.
+*   **Exit Criteria**: Diff reviewed against contract scope; No files outside allowed list touched; Code follows existing style/patterns; **Plan compliance check run** (`patch_plan.md` vs `git diff`); Every changed non-test source file has a corresponding test file touched or justified; **Commit hygiene: NO Co-authored-by, AI bylines, WIP, debug, or temp commits.**
+*   **Blockers**: Files outside contract modified; Dependency added without approval; Formatting-only changes mixed with logic changes; Planned files not touched; Untested source changes; **Review items not addressed** (review_response mode); **Commit hygiene violations**.
 
-## Definition of Done
+#### Phase 5: VALIDATE
+*   **Responsibility**: Execution of the validation plan.
+*   **Entry Criteria**: All validation commands from the contract's validation plan were run; `.prforge/validation_ledger.md` written with honest results; No fake validation.
+*   **Exit Criteria**: Validation ledger is honest and complete; All critical tests pass; Any failures are explained.
+*   **Blockers**: Validation commands were not actually run; Validation ledger contains fabricated results; Critical tests fail without explanation.
 
-Generated at PLAN time, specific to the issue. Not a generic template — every item names a specific file, function, test command, or observable behavior.
+#### Phase 6: SELF_REVIEW
+*   **Responsibility**: Hostile self-audit & hygiene check.
+*   **Entry Criteria**: Hostile review completed using `references/hostile-review-checklist.md`; `.prforge/hostile_review.md` written; All "no" or "unclear" answers addressed.
+*   **Exit Criteria**: Hostile review verdict is PASS; Edge cases handled or documented; **Hostile review covers all required review items** (each required_change/blocker item has a corresponding finding).
+*   **Blockers**: Hostile review found unresolved correctness issues; Alternate code paths might be broken; Tests missing for core fix.
 
-**How it works:**
-1. Written at the end of PLAN from the contract and patch plan
-2. SHA256 hashed immediately → stored in `state.dod.generation_hash`
-3. At PACKAGE, every checked item must have corroborating evidence:
-   - Implementation items → file must appear in `git diff`
-   - Test items → command must appear as "Passed" in `validation_ledger.md`
-   - Review items → must appear as "addressed" in `review_decomposition.md`
-   - Scope items → `state.scope.delta_check.unexpected_files` must be empty
-4. At `/pr-approve`, current hash of `dod.md` is compared to `state.dod.generation_hash`
-   - Hash mismatch → **TAMPERED**: entire run invalidated, restart from PLAN
-   - Evidence missing for checked items → treated as unchecked → BLOCKED
+#### Phase 7: PACKAGE
+*   **Responsibility**: Review freshness check & PR body generation.
+*   **Entry Criteria**: `.prforge/pr_body.md` or `.prforge/review_response.md` written; PR body only includes validation commands that were actually run; `.prforge/approval.md` written; Every item in `.prforge/dod.md` is either checked or has a documented exception.
+*   **Exit Criteria**: Approval artifact is complete and scannable; Preflight check passes; Branch tracks correct remote (fork, not upstream); `dod.md` status table populated in `approval.md`.
+*   **Blockers**: Preflight check fails; PR body contains un-run validation claims; Branch tracks wrong remote; `dod.md` has unchecked items.
 
-**The agent cannot check off DoD items without doing the work.**
+#### Phase 8: APPROVAL
+*   **Responsibility**: Human sign-off & integrity fingerprinting.
+*   **Entry Criteria**: User explicitly approved the action; Approved action matches what's in `approval.md`.
+*   **Exit Criteria**: Action executed exactly as approved; `state.json` phase updated to SHIPPED (via `/pr-approve`).
 
----
+#### Phase 9: POSTMORTEM
+*   **Responsibility**: (Auto) Lifecycle analysis & evidence capture.
+*   **Entry Criteria**: Run SHIPPED; Terminal snapshot captured (`terminal_snapshot.py`).
+*   **Exit Criteria**: `postmortem.json` generated with Summary, Evidence, and Tags.
 
-## Artifacts
+#### Phase 10: MEMORY_INDEX
+*   **Responsibility**: (Auto) Lesson extraction & SQLite/FTS5 indexing.
+*   **Entry Criteria**: POSTMORTEM complete; Artifacts verified.
+*   **Exit Criteria**: Memory records created/updated; FTS5 index rebuilt.
 
-All run artifacts live in `.prforge/` in the target repo. Auto-excluded from git in Phase 0 via `.git/info/exclude`. Pre-commit hook independently blocks staged `.prforge/` files.
-
-| File | Purpose |
-|------|---------|
-| `state.json` | Full run state: phase, permissions, scope, blast radius, intelligence mode, validation results, CI status, branch status, ownership, DoD hashes, approval fingerprint |
-| `task.json` | Structured task: type, source_url, objective, github_user, required_items, optional_items |
-| `dod.md` | Definition of Done — issue-specific checklist, hashed at generation, evidence-verified at approval |
-| `repo_intelligence.md` | GitNexus/gh repo context and MCP tool call instructions written by the hook |
-| `contract.md` | PR contract: objective, required outcomes, allowed/forbidden files, validation plan, release gate |
-| `patch_plan.md` | Per-file edit plan: reason, planned change, risk, test for each file |
-| `review_decomposition.md` | All reviewer concerns: classified, task-queued, status-tracked |
-| `validation_ledger.md` | Commands run (with honest results), commands not run (with reason), test coverage summary |
-| `hostile_review.md` | Self-audit verdict, findings, deferred follow-up suggestions |
-| `pr_body.md` | Generated PR description |
-| `review_response.md` | Drafted maintainer response |
-| `approval.md` | Approval artifact: DoD status table, scope check, validation summary, public text preview, integrity fingerprint, action checkboxes |
-| `snapshots/preflight.patch` | Safety snapshot before any edits |
+#### Phase 11: COMPLETE
+*   **Responsibility**: Resource cleanup.
+*   **Exit Criteria**: All locks and Redis leases released.
 
 ---
 
-## The Approval Gate
+## 6. The 13 Repair States (Automated Redirection)
 
-`approval.md` is the only thing you need to read. It's designed to be scanned in 15 seconds.
-
-**What it contains:**
-
-```markdown
-# Approval Request
-
-Status: READY_TO_SHIP | READY_WITH_WARNINGS | BLOCKED
-
-## Plain-English summary
-[2-5 sentences: what was fixed, why it matters]
-
-## Definition of Done
-| Item                              | Status      |
-|-----------------------------------|-------------|
-| Fixed refreshToken() in oauth.ts  | ✅ done     |
-| Test: npm test -- oauth.test.ts   | ✅ done     |
-| No files outside contract touched | ✅ done     |
-| R1 — remove extra scope addressed | ✅ done     |
-
-## What changed / What was NOT changed
-[Scope boundaries]
-
-## Blast radius
-Score: low | medium | high
-Files changed: N | Tests found: N | Dependents: N | Public API touched: Yes/No
-
-## Validation
-Passed: [commands run and passed]
-Failed: [commands + reason + related-to-changes: Yes/No]
-Not run: [commands + reason]
-
-## Risk: Low / Medium / High
-
-## GitHub checks
-[check_name] — passed/failed — related: Yes/No
-
-## Review freshness
-Last fetched: [timestamp] | New comments since: 0 | Fresh: Yes
-
-## Repo intelligence
-GitNexus: available | Unavailable capabilities: None | Risk impact: None
-
-## Branch status
-Base: current | Commits behind: 0 | Drift: base_current
-
-## Ownership
-PR author: @login | Confirmed owner: Yes
-
-## Needs your decision
-[Any needs_user_decision items from reviewer feedback]
-
-## Public text to be posted
-[Exact PR body or review response — review carefully]
-
-## Approval covers
-- [x] Push branch — git push origin fix/branch-name
-- [ ] Force-push
-- [ ] Create PR
-- [ ] Post review response
-- [ ] Request review
-
-## Integrity fingerprint
-diff_hash:        [SHA256]
-validation_hash:  [SHA256]
-approval_hash:    [SHA256]
-dod_hash:         [SHA256 — must match state.dod.generation_hash]
-
-## Your options
-Approve / Request changes / Stop
-```
-
-**Integrity:** `/pr-approve` verifies all four hashes before executing anything.
-- diff or validation changed → approval stale → regenerate
-- approval.md edited → stale → regenerate
-- dod.md edited → **tampered** → restart from PLAN
-
-Only the actions in the checked `Approval covers` boxes are executed. Nothing else.
-
----
----
-
-## Installation
-
-**Prerequisites:**
-- [Claude Code](https://claude.ai/code) installed and authenticated
-- `gh` CLI authenticated (`gh auth login`)
-- Bash (for hook scripts)
-- Git
-
-**Standalone mode (no pip packages required):**
-```bash
-# 1. Clone or copy PRForge onto your machine
-git clone https://github.com/<your-username>/prforge.git
-# or download and extract the folder
-
-# 2. Register as a local Claude Code plugin
-#    In your Claude Code session:
-/plugin install /path/to/prforge
-
-# 3. Enable it
-/plugin enable prforge@local
-
-# 4. Verify hooks are loaded (new session required)
-#    Start a session in any repo:
-#    /pr https://github.com/org/repo/issues/123
-```
-
-**Distributed mesh mode (requires additional packages):**
-```bash
-# Install pip dependencies (Redis + fastembed for mesh intel)
-pip install -r requirements.txt
-
-# Set up Redis on coordinator machine
-#   bind 127.0.0.1, requirepass set, appendonly yes
-
-# Then follow: /pr-distributed <role>  (see Distributed Setup section)
-```
-
-**Verify it works:**
-```bash
-# Start a fresh Claude Code session in a repo
-cd /path/to/some-repo
-claude
-
-# In the session, the plugin should auto-activate on:
-#   /pr <issue-or-PR-url>
-#   Pasting a GitHub issue/PR URL
-#   "find PR candidates in org/repo"
-```
-
-**requirements.txt** lists packages for distributed mesh only:
-- `redis>=4.6.0` — Redis Python client
-- `fastembed>=0.5.0` — Embeddings + reranking for Intel Engine
-
-Standalone PRForge needs **zero pip packages**.
+| State | Triggering Condition | Required Action |
+|-------|----------------------|-----------------|
+| **SCOPE_RECONCILE** | `git diff` touches files not in `contract.md`. | Revert extra files OR expand contract. |
+| **STATE_SYNC_REPAIR**| `state.json` in-memory != on-disk. | Re-read `state.json` or sync to disk. |
+| **LEASE_RENEWAL_REPAIR**| Redis mesh lease expired (TTL reached). | Re-acquire lease via `meshctl`. |
+| **REVIEW_REFRESH** | New maintainer comments mid-run. | Re-run INVESTIGATE to classify new items. |
+| **SCOPE_UPDATE** | Changes require contract expansion. | Update `contract.md` and re-hash `dod.md`. |
+| **PLAN_UPDATE** | `dod.md` hash mismatch or patch invalidated. | Regenerate plan and DoD artifacts. |
+| **VALIDATION_REPAIR** | Test failures in changed source area. | Fix bug or update test expectations. |
+| **INTELLIGENCE_REPAIR**| GitNexus MCP became unavailable mid-run. | Document degraded intel & fallback. |
+| **ARTIFACT_REPAIR** | Mandatory artifact (e.g., `dod.md`) deleted. | Re-generate missing artifact. |
+| **COORDINATOR_RECONCILE**| Mesh worker/coordinator mismatch. | Verify role assignment in Redis. |
+| **STYLE_REPAIR** | Formatter or linter failure. | Run `lint --fix` or `format`. |
+| **COMMIT_REPAIR** | Hygiene violation or author mismatch. | Fix commit message or author identity. |
+| **POLL_CI** | Waiting for GitHub Actions status. | Periodically check `gh pr checks`. |
 
 ---
 
-## Failure Mode Guards
+## 7. Deterministic Hook Reference
 
-| # | Guard | What it catches |
-|---|-------|----------------|
-| 1 | **Review Freshness** | New reviewer comments or CI failures since last fetch → return to INVESTIGATE |
-| 2 | **CI Classification** | Failed checks classified as related vs unrelated; related failures block READY_TO_SHIP |
-| 3 | **Branch Drift** | Base branch diverged or wrong → block before edits |
-| 4 | **Artifact Exclusion** | `.prforge/` staged or tracked → remove before approval |
-| 5 | **Public Text Preview** | Exact posted text must be visible in approval.md |
-| 6 | **Commit Hygiene** | AI bylines, co-author trailers, WIP/debug commits → blocked at pre-commit hook |
-| 7 | **Scope Delta** | Files changed outside contract → remove or update contract |
-| 8 | **Approval Status** | `BLOCKED` status cannot be shipped; must be resolved first |
-| 9 | **Ownership Ambiguity** | PR not confirmed as user's → read-only mode until confirmed |
-| 10 | **Intelligence Disclosure** | GitNexus unavailable → must record and disclose capability gaps |
-| — | **DoD Tamper** | `dod.md` edited after generation → entire run invalidated |
-| — | **Plan Compliance** | Actual diff doesn't match `patch_plan.md` → finish planned work or update contract |
+Hooks are the system's mechanical enforcement layer, registered via `.claude-plugin/hooks/hooks.json`.
 
----
+### 7.1 PreToolUse (Safety & Gating)
+*   **`preflight.sh` (Bash)**: Intercepts `git push`, `gh pr`, `git commit`.
+    *   Blocks push to `upstream`. Hard-blocks `--force` (only `--force-with-lease`).
+    *   Blocks commits with "WIP", "debug", "Claude Code", or "Generated by".
+    *   Verifies `CURRENT_DIFF_HASH` matches `approval.md` fingerprint.
+*   **`phase-gate-enforcer.sh` (Bash)**: Restricts tool usage by phase.
+    *   Example: No `Write` allowed in INVESTIGATE; no `gh pr` allowed before APPROVAL.
+*   **`mesh-lock-guard.sh` (Bash/Write/Edit)**: Enforces distributed write-locks.
+    *   Verifies node holds an active Redis `lease:path` for the file being edited.
+*   **`phase-boundary.sh` (Write)**: Intercepts `state.json` updates.
+    *   Validates requested phase transitions against the allowed state machine.
+    *   **Loop Detector**: Circuit breaker blocks transitions after 3 consecutive failures.
 
-## Requirements
-
-- `gh` CLI authenticated (`gh auth login`)
-- Bash (for hook scripts)
-- GitNexus MCP — optional; auto-detected at runtime for full symbol intelligence
-
-## Installation
-
-The plugin is registered via `.claude-plugin/plugin.json` which declares:
-- `../prforge/skills/prforge/` — skill
-- `../prforge/commands/` — `/pr`, `/pr-continue`, `/pr-approve`
-- `../prforge/hooks/hooks.json` — PreToolUse + PostToolUse hooks
-
-Load it as a local plugin in Claude Code (add the `/home/bamn/prforge` directory as a plugin).
-
-**Verify CLAUDE_PLUGIN_ROOT resolves correctly.** The hooks in `hooks.json` use
-`${CLAUDE_PLUGIN_ROOT}/hooks/preflight.sh`. `CLAUDE_PLUGIN_ROOT` must resolve to the
-`prforge/prforge/` directory (where `hooks/`, `skills/`, `commands/` live), not the outer
-`prforge/` directory. If hooks silently fail, check this first:
-
-```bash
-# In a session with the plugin loaded, check what CLAUDE_PLUGIN_ROOT resolves to.
-# Expected: /home/bamn/prforge/prforge
-# If wrong: hooks will silently fail — the bash command simply exits non-zero.
-```
-
-**Git hooks** (`pre-commit`, `commit-msg`) are auto-installed by Phase 0 on first run in
-each target repo. No manual setup required. They are installed only if those hook slots
-are not already occupied.
+### 7.2 PostToolUse (Intelligence & Automation)
+*   **`memory-autocapture.sh`**: Post-Bash/Write/Edit.
+    *   Logs every state-changing tool call and registers resulting artifacts in the SQLite ledger.
+*   **`gitnexus-intelligence.sh`**: Post-Read.
+    *   Auto-discovers GitNexus/context-mode MCP servers.
+    *   Injects symbol-mapping instructions into `repo_intelligence.md`.
+*   **`blast-radius.sh`**: Post-Write/Edit.
+    *   Computes `changed_files`, `test_ratio`, `dependency_depth`, `api_touched`.
+    *   Updates the real-time risk score in `state.json`.
+*   **`phase-injector.sh`**: Post-Write.
+    *   Detects `phase` changes and injects the new playbook Markdown into the model's context.
+*   **`discipline-check.sh`**: Post-Write.
+    *   Runs `discipline-check.py` to enforce Karpathy-grade surgical edit standards.
 
 ---
 
-## Non-Negotiable Rules
+## 8. Security & Safety Invariants (The Rules)
 
-1. **No fake validation** — "should pass" is not a result. Either ran and passed, or not run with a reason.
-2. **No blind push** — safety checks always run first. Preflight hook enforces this at the shell level.
-3. **No force-push without approval** — always `--force-with-lease`, never `--force`.
-4. **No scope creep without contract + DoD update** — report secondary issues; only fix them as a separate commit with contract update.
-5. **No refactor/cleanup mixed into a fix** — deferred to `hostile_review.md`, not included.
-6. **No dependency changes** unless explicitly contract-approved.
-7. **No defensive maintainer responses** — acknowledge, fix, move on. No arguing.
-8. **No claiming GitNexus intelligence if unavailable** — record exact missing capabilities in state and approval artifact.
-9. **No publishing without approval** — push, PR creation, comments, review requests all require your sign-off.
-10. **No AI attribution on commits** — no `Co-authored-by: Claude/Opus/Sonnet/Haiku/Anthropic`, no "Generated by Claude Code", no AI footers. Commits use the configured human Git identity (`git config user.name`/`user.email`). GitHub ownership is separately verified via `gh api user` — these are not the same thing.
-11. **No `.prforge/` in git** — auto-excluded via `.git/info/exclude`; pre-commit hook blocks staged artifacts.
-12. **No shipping with `BLOCKED` status** — failed validation in changed area, dirty scope, stale review, or missing DoD evidence must be resolved first.
-13. **No destructive workflow on ambiguous ownership** — if PR ownership is unclear, enter read-only mode and confirm before proceeding.
-14. **No hidden public text** — exact PR body and review response visible in approval artifact before posting.
-15. **No shipping without test coverage** — agent writes missing tests itself. Only escalates if test environment requires production infrastructure. Never escalates just because tests are missing.
-16. **No editing `dod.md` to self-check`** — DoD is hashed at generation. Edits invalidate the run.
+PRForge enforces 13 non-negotiable safety rules through mechanical gates.
+
+### 8.1 Core Safety Rules
+1.  **Rule 1: Never Push Blindly** — Always run `git status`, `git branch -vv`, `git remote -v`, `git log --oneline -8`, and `git diff --stat` before any push. Verify branch, remote, and diff match expectations.
+2.  **Rule 2: Force-With-Lease** — Never use raw `--force`. `--force-with-lease` is required to protect collaborator work. Destructive force-pushes MUST have explicit user approval in `approval.md`.
+3.  **Rule 3: Test Honesty** — Never claim tests passed unless actually run. Every `validation_ledger.md` entry must correspond to an actual CLI execution. Fake validation is a BLOCKER.
+4.  **Rule 4: Scope Lockdown** — Edits outside `contract.md` allowed files are detected by the Write hook and trigger `SCOPE_RECONCILE`. Revert or expand contract before proceeding.
+5.  **Rule 5: No AI Attribution** — `commit-msg` hook strips `Co-authored-by: Claude`, AI bylines, and "Generated by Claude Code". Commits must use the configured human Git identity.
+6.  **Rule 6: Artifact Separation** — All state/plans live in `~/.prforge/runs/`. The target repo contains only a `.prforge-run` pointer, which is automatically added to `.git/info/exclude`.
+7.  **Rule 7: Never Publish Without Approval** — Push, PR creation, review comments, and labels ALL require explicit human "yes". silence or "looks right" does NOT count as approval.
+8.  **Rule 8: DoD Tamper Proof** — `dod.md` is SHA256 hashed at PLAN generation. Any manual edit to the checklist invalidates the entire run, forcing a restart from PLAN.
+9.  **Rule 9: Finality Rule** — Every public response (PR body, review comment) MUST include the contributing commit hash at the top: `**Commit:** <sha> (<short-sha>)`.
+10. **Rule 10: Hostile Self-Review** — Must pass the 10-question hostile review (`references/hostile-review-checklist.md`) with a PASS verdict. No "all good" summaries without per-item evidence.
+11. **Rule 11: No shipping with BLOCKED status** — Dirty scope, failed tests in touched area, or stale reviews block shipping. Blocking conditions cannot be overridden.
+12. **Rule 12: Ownership Ambiguity** — If PR ownership is unclear, enter read-only mode and confirm via `gh api user` before enabling destructive actions.
+13. **Rule 13: No Hidden Public Text** — Exact posted text MUST be visible in `approval.md` for verbatim verification before it is posted to GitHub.
+
+### 8.2 Coding Discipline ( Karpathy Mandates )
+If `andrej-karpathy-skills` is not present, the built-in fallback enforces:
+- **Think Before Coding**: State assumptions and minimal change path before any edit.
+- **Simplicity First**: Smallest correct fix > architectural cleanup. No new abstractions unless necessary.
+- **Surgical Changes**: Every edited line must map to a requirement. No renames or modernization of unrelated code.
+- **Goal-Driven Execution**: No "while I'm here" refactors or style cleanups.
+
+### 8.3 Git Disaster Recovery
+If git state is corrupted (Detached HEAD, Branch Diverged, Wrong Base), the system redirects to `phases/blocked.md` for recovery:
+- **Branch Behind**: Recommend `git pull --rebase`.
+- **Diverged**: Recommend `git rebase` or `git reset`.
+- **Accidental Edit on Main**: Recommend `git stash` and move to feature branch.
 
 ---
 
-## Version
+## 9. Distributed Mesh Protocol (Redis-Lua)
 
-v1.2.1 — Coding discipline enforcement integrated as mandatory phase gates. Companion plugin `andrej-karpathy-skills` is optional to install, but if present its rules become mandatory PRForge gates (think before coding, simplicity first, surgical changes, goal-driven execution). Built-in fallback `policies/coding-discipline.md` enforces the same behavior when the external plugin is absent. Added deterministic `discipline-check` hook (PostToolUse on Write/Edit/MultiEdit) writing `discipline_report.json`. Updated plugin manifest with `"hooks"` key in `plugin.json`, fixed sync script to place `plugin.json` at plugin root (not `.claude-plugin/`). Synced to all OR1/OR2/OR3 profiles. Previous (v1.2.0): Distributed mesh with Manager Mode, monitors, mesh_signing, expanded hook coverage. v1.1.0: Candidate discovery, tamper-proof DoD, plan compliance, distributed mesh MVP.
+Coordinated via Redis Streams and atomic Lua scripts for zero-race-condition multi-agent dispatch.
+
+### 9.1 Key Redis Schemas (`Workflow:<cluster>:`)
+*   **SET `Workflow:<c>:nodes`**: All registered node IDs.
+*   **HASH `Workflow:<c>:node:<node_id>`**: Node state, heartbeat, and capability registration.
+*   **HASH `Workflow:<c>:job:<job_id>`**: Full job state, phase, and artifact signatures.
+*   **HASH `Workflow:<c>:pr:<slug>:<n>`**: Auditor cursor state (Last SHA, Last Review, Last Checks).
+*   **STREAM `Workflow:<c>:stream:jobs:pending`**: Durable job queue for workers.
+*   **STREAM `Workflow:<c>:stream:events`**: Audit event log for cluster-wide observability.
+*   **ZSET `Workflow:<c>:audit_budget`**: Timestamps of LLM audits for hourly rate-limiting.
+*   **PUBSUB `Workflow:<c>:notify`**: Real-time cluster-wide desktop notifications.
+
+### 9.2 Auditor Cursor Semantics (roles/auditor.md)
+The auditor uses three independent cursors to implement the **Skip-if-unchanged invariant**:
+- **`last_review_cursor`**: SubmittedAt of the latest processed external review. Prevents duplicate review response jobs.
+- **`last_checks_hash`**: Stable normalized hash of CI check state (Sorted by name: Conclusion + Status + URL).
+- **`last_audited_head_sha`**: Head SHA at the time of the last `audit_only` job.
+- **LLM Audit Budget**: `ZCOUNT` check against `max_llm_audits_per_hour` before enqueuing speculative jobs.
+- **`medium_idle_only`**: Medium-severity polish jobs are ONLY queued when zero P0/P1 high-priority pressure exists in the stream or active set.
+
+### 9.3 Worker Lease Management (roles/worker.md)
+Workers renew all four leases every 15s (Heartbeat interval):
+1.  **`lease:job:<id>`**: Job ownership lock.
+2.  **`lease:pr:<repo>:<pr>`**: Uniqueness lock per pull request.
+3.  **`lease:branch:<repo>:<branch>`**: Branch uniqueness lock.
+4.  **`lease:worker:<node_id>`**: Busy lock for the worker node itself.
+*   **Heartbeat TTL**: Node keys expire after `HB_INTERVAL * 3` missed heartbeats.
+
+### 9.4 Checkout Broker & Isolated Worktrees
+Managed by `checkout_broker.py`, workers follow a strict isolation protocol:
+1.  **Bare Repository Cache**: One bare clone per repo stored in `~/.prforge/repos/`.
+2.  **Isolated Worktree Spawn**: Each assigned job gets a fresh directory via `git worktree add` in `~/.prforge/worktrees/`.
+3.  **Forensic Quarantine**: Dirty/aborted worktrees are moved to `~/.prforge/quarantine/` for audit instead of being deleted.
+
+### 9.5 Manager Mode Authority Levels
+- **`off`**: Standalone behavior.
+- **`certify_only`**: Dual-signature verification (Auditor + Coordinator), no public actions.
+- **`internal_actions`**: Manager can release leases, requeue jobs, or block runs.
+- **`low_risk_public`**: Permission to `push`, `comment`, and `request_review`. Never `merge` or `force_push` to upstream.
+
+---
+
+## 10. Intelligence & RAG Engine
+
+PRForge uses intelligence in two paths: the **Information Path** (selecting context for the agent) and the **Enforcement Path** (triggering deterministic gates and risk signals).
+
+### 10.1 Intelligence Hierarchy
+1.  **GitNexus MCP**: Primary for 360° symbol views (`context`), blast radius (`impact`), and diff mapping (`detect_changes`).
+2.  **Context-Mode MCP**: Primary for project-wide search (`search_codebase`) and automated validation (`run_tests`).
+3.  **Local Fallback**: Automatically reverts to `rg`, `find`, `git log`, and `gh` CLI with a "Degraded Intelligence" warning and sets `minimum_risk_floor` to MEDIUM.
+
+### 10.2 RAG Intel Engine (`intel_engine.py`)
+Uses local **FastEmbed** (CPU-optimized) for risk detection:
+*   **Recall**: `BAAI/bge-small-en-v1.5` embeddings over current run artifacts.
+*   **Precision**: `Xenova/ms-marco-MiniLM-L-6-v2` cross-encoder reranking pass.
+*   **Scoring**: Combines cosine similarity (35%) and rerank scores (65%). Risks > 0.80 trigger automated redirects.
+
+### 10.3 Local vs. Mesh Intel Split
+- **Mesh Intel (Global)**: Owns cross-PR memory, global artifact index, audit prioritization, and cluster-wide policy decisions.
+- **Local Intel (Worker)**: Owns current run context, cached policy bundle, local risk signals, and fast recoverable redirects.
+
+### 10.4 Fail-Safe Behavior Matrix
+- **Mesh Intel Down**: Local adaptive enforcement continues from cached policy bundle.
+- **Local Intel Down**: Deterministic gates continue; ambiguous cases escalate to the human.
+- **Redis Down**: Current safe local work continues; risky transitions (phases/public actions) wait for reconnect.
+- **FastEmbed/Reranker Down**: Adaptive enforcement is disabled; deterministic safety gates remain active.
+
+### 10.5 Policy Decision Schema
+Decisions from `prforge_mesh.py policy-check` follow a strict schema:
+- `decision`: `allow`, `warn`, `redirect_recoverable`, or `escalate`.
+- `redirect_state`: (e.g., `VALIDATION_REPAIR`) The repair phase to enter.
+- `required_next_action`: High-fidelity instruction for the agent (e.g., "Add regression test for malformed parser input").
+
+---
+
+## 11. Engineering Memory (4-Layer)
+
+PRForge converts ephemeral feedback into durable engineering knowledge through a multi-layered persistence architecture.
+
+### 11.1 The 4-Layer Architecture
+1.  **Layer 0 (Raw Truth)**: Artifact trail on disk under `~/.prforge/runs/`. Contains `github/`, `git/`, and `agent/` subdirectories.
+2.  **Layer 1 (The Ledger)**: SQLite database (~/.prforge/memory_ledger.db).
+    - **`runs`**: Primary log of every PRForge execution.
+    - **`artifacts`**: Registry of every file produced (Contract, DoD, Ledgers).
+    - **`events`**: Append-only log of every tool call and phase transition.
+3.  **Layer 2 (The Analysis)**: Structured `postmortem.json` summarizing:
+    - **Outcome**: (MERGED, CLOSED, ABANDONED).
+    - **Success Signal**: CI pass rate and maintainer sentiment.
+    - **Evidence**: Specific quotes from reviews and failure patterns from CI.
+4.  **Layer 3 (Lessons)**: Scoped, searchable memory records.
+    - **Indexing**: Uses SQLite FTS5 for high-performance retrieval.
+    - **Scoping**: Lessons are tagged by `repo`, `subsystem`, and `file_glob`.
+
+### 11.2 Lesson Promotion Logic (`memory_indexer.py`)
+Lessons are promoted through a formal lifecycle to ensure only high-confidence evidence reaches the agent:
+- **Candidate**: A single observation from a postmortem.
+- **Inferred**: Maintainer preferences (e.g., "prefer snake_case here") extracted from reviews.
+- **Active**: Promoted when `recurrence_count >= 2` AND `confidence == high`.
+- **Global**: Lessons verified across multiple independent repositories.
+
+### 11.3 Preflight Injection
+During the INTAKE phase, the system queries the FTS5 index for lessons matching the current repo and objective. These are injected into the agent's context as **"Lessons from Prior Runs"**, preventing the recurrence of previous mistakes or maintainer objections.
+
+---
+
+## 12. Technical Component Encyclopedia
+
+### 12.1 Core Scripts (`scripts/`)
+- **`prforge_state.py`**: Implementation of locked atomic read/write for `state.json`. Uses file locks to prevent race conditions during concurrent tool calls.
+- **`terminal_snapshot.py`**: Evidence capture engine. Runs before POSTMORTEM transition; captures `pr.json`, `review-comments.jsonl`, `ci-runs.jsonl`, `final.diff`, and `commits.jsonl`.
+- **`postmortem_generator.py`**: Analytical summarizer. Correlates CI failures and review quotes to extract "Could be better" and "Avoid next time" signals.
+- **`memory_ledger.py`**: SQL interface for the PRForge persistent memory. Manages the SQLite schema, FTS5 rebuilding, and artifact registration.
+- **`memory_indexer.py`**: High-level memory manager. Implements lesson promotion logic (Candidate → Inferred → Active) based on recurrence counters.
+- **`validate_phase_machine.py`**: Consistency sentinel. Verifies that the state machine definition is coherent across SKILL.md, bash hooks, and phase playbooks.
+
+### 12.2 Deployment & Sync (`/`)
+- **`remote-deploy.sh`**: Production deployment script. Uses rsync to push the plugin to remote hosts (e.g., 10.9.66.198) and surgically updates remote `.claude` profile settings and marketplaces.
+- **`sync.sh`**: Development synchronization. Mirroring the codebase to multiple local OpenRouter/Claude Code profiles for testing.
+
+### 12.3 Mesh Coordination (`scripts/mesh/`)
+- **`coordinator.py`**: The cluster's central dispatcher. Handles node discovery, lease acquisition, and reliable job assignment via Redis Streams.
+- **`auditor.py`**: The cluster's "eyes." Polls the GitHub API every 15m; implements cursor-based change detection to prevent redundant work.
+- **`worker.py`**: The local agent daemon. Sends 15s heartbeats, renews leases, and writes `inbox/job.json` to trigger agent activity.
+- **`manager.py`**: The authority layer. Implements the dual-signature verification protocol (HMAC-SHA256) for public action certification.
+- **`policy_engine.py`**: Decision logic. Correlates deterministic safety gates with advisory signals from the RAG Intel Engine.
+- **`intel_engine.py`**: The local RAG implementation. Manages FastEmbed CPU-optimized vector indices and cross-encoder reranking.
+- **`checkout_broker.py`**: Infrastructure manager. Handles isolated `git worktree` lifecycles and quarantine management for aborted jobs.
+- **`mesh_signing.py`**: Cryptographic utility. Implementation of HMAC-SHA256 signing for all verdict and certification JSON artifacts.
+
+### 12.4 Shell Hooks (`hooks/`)
+- **`preflight.sh`**: Critical safety sentinel. Intercepts bash commands to block unsafe pushes, force-pushes, and WIP commits.
+- **`phase-boundary.sh`**: Pipeline enforcer. Intercepts `state.json` writes to validate state transitions and prevent phase-skipping.
+- **`blast-radius.sh`**: Automated risk assessor. Computes files-changed, test-ratio, and dependency-depth after every edit.
+- **`discipline-check.sh`**: Static analyzer. Verifies Karpathy-grade behavioral compliance (surgical edits, simplicity).
+- **`memory-autocapture.sh`**: Forensic logger. Automatically registers every tool call and file artifact in the memory ledger.
+- **`prforge-common.sh`**: Shared utility library. Logic for slug resolution, state-directory discovery, and atomic file locking.
+
+### 12.5 Background Monitors (`monitors/`)
+- **`local-watch.sh`**: Session sentinel. Watches for Git drift (HEAD movement), untracked artifacts, and approval integrity.
+- **`distributed-worker-watch.sh`**: Node sentinel. Watches for assigned jobs in Redis and ensures heartbeats/leases are active.
+- **`distributed-coordinator-watch.sh`**: Cluster sentinel. Prunes dead nodes and requeues abandoned jobs in the pending stream.
+
+---
+
+## 13. Behavioral Reference & Policy Manual
+
+### 13.1 Hostile Review Checklist (The 10 Invariants)
+Agents must answer these questions in `hostile_review.md` before advancing to PACKAGE.
+1.  **Correctness**: Does this solve the actual problem stated in the contract? Does it handle edge cases?
+2.  **Regressions**: Are there alternate code paths (auth types, provider configs) that this might break?
+3.  **Scope**: Did I touch only allowed files? Did I avoid unrelated cleanup or "while I'm here" changes?
+4.  **API Integrity**: Did I avoid changing public API signatures or config precedence chains?
+5.  **Test Coverage**: Does every changed source file have corresponding test changes? Do tests actually fail without the fix?
+6.  **Stale Tests**: If a test file exists for a changed source, was it updated to match new logic?
+7.  **Validation Honesty**: Did I record real outputs in `validation_ledger.md`? Does the PR body match actual validation results?
+8.  **Git Safety**: Is the branch tracking the fork (origin), not the upstream? Is the history free of WIP commits?
+9.  **Maintainer Perception**: Would a maintainer consider this small (5-min review)? Is the language non-defensive?
+10. **Hygiene**: Are there NO Co-authored-by trailers, AI bylines, or AI-assisted footers in commits?
+
+### 13.2 Review Item Classification
+Reviewer concerns are fetched and decomposed into these mandatory categories:
+- **`blocker`**: Prevents merge; must be addressed with code changes.
+- **`required_change`**: Expected by maintainer; must be addressed.
+- **`maintainer_preference`**: Advice on style or pattern; should be followed.
+- **`scope_reduction`**: Maintainer flagged a change as unnecessary; must be reverted.
+- **`optional_suggestion`**: Non-binding idea; agent chooses whether to implement.
+- **`needs_user_decision`**: Ambiguous feedback; agent MUST escalate to human in `approval.md`.
+- **`already_addressed`**: Feedback that is already reflected in the latest diff.
+
+### 13.3 Candidate Discovery Scoring
+Points are assigned based on these achievability signals:
+- **Scope Size**: Estimated files changed (Smaller = Higher Score).
+- **Testability**: Presence of existing test suite and local reproducibility.
+- **Maintainer Acceptance**: Existence of maintainer comments confirming the bug or approving the feature.
+- **Dependency Risk**: Avoidance of core auth paths or massive dependency updates.
+- **Repo Responsiveness**: Recent merged PR activity (High Activity = Higher Score).
+
+---
+
+
+## Version History
+- **v1.5.0**: Total Convergence. Integrated RAG, SQLite Memory, 11-Phase/13-Repair Machine, 10 Hooks, Redis-Lua Mesh.
+- **v1.4.0**: Durable storage & phase reconciliation.
+- **v1.3.0**: Distributed Mesh MVP.
+- **v1.1.0**: Tamper-proof DoD.
+- **v1.0.0**: Initial release.
