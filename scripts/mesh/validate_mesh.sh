@@ -9,6 +9,9 @@
 
 set -uo pipefail
 
+# Timeout for redis-cli calls (seconds) — override with PRFORGE_REDIS_TIMEOUT
+REDIS_TIMEOUT="${PRFORGE_REDIS_TIMEOUT:-10}"
+
 PASS=0
 FAIL=0
 SKIP=0
@@ -82,10 +85,18 @@ REDIS_PORT=$("$PYTHON" -c "from urllib.parse import urlparse; u=urlparse('$REDIS
 REDIS_PASS=$("$PYTHON" -c "from urllib.parse import urlparse; u=urlparse('$REDIS_URL'); print(u.password or '')" 2>/dev/null)
 
 rcli() {
-    if [[ -n "$REDIS_PASS" ]]; then
-        redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" -a "$REDIS_PASS" --no-auth-warning "$@" 2>/dev/null
+    if command -v timeout >/dev/null 2>&1; then
+        if [[ -n "$REDIS_PASS" ]]; then
+            timeout "$REDIS_TIMEOUT" redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" -a "$REDIS_PASS" --no-auth-warning "$@" 2>/dev/null
+        else
+            timeout "$REDIS_TIMEOUT" redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" "$@" 2>/dev/null
+        fi
     else
-        redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" "$@" 2>/dev/null
+        if [[ -n "$REDIS_PASS" ]]; then
+            redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" -a "$REDIS_PASS" --no-auth-warning "$@" 2>/dev/null
+        else
+            redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" "$@" 2>/dev/null
+        fi
     fi
 }
 
