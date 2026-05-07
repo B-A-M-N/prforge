@@ -15,10 +15,14 @@ fi
 
 # Logging (debug only, not shown to model)
 LOG_DIR="$HOME/.prforge/hook-logs"
-mkdir -p "$LOG_DIR" 2>/dev/null
+LOG_FILE=""
+if mkdir -p "$LOG_DIR" 2>/dev/null && [ -w "$LOG_DIR" ]; then
+    LOG_FILE="$LOG_DIR/autocapture.log"
+fi
 
 log() {
-    echo "$(date -Iseconds) [memory-autocapture] $1" >> "$LOG_DIR/autocapture.log" 2>/dev/null || true
+    [ -n "$LOG_FILE" ] || return 0
+    echo "$(date -Iseconds) [memory-autocapture] $1" >> "$LOG_FILE" 2>/dev/null || true
 }
 
 log "Hook fired"
