@@ -15,6 +15,7 @@ Manager Mode:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import sys
@@ -30,12 +31,16 @@ import redis
 
 from redis_backend import (
     acquire_job_leases,
+    acquire_path_locks_atomic,
     emit_event,
     get_job,
+    lease_path,
     list_nodes,
+    normalize_path_for_lease,
     normalize_roles,
     read_pending_jobs,
     release_job_leases,
+    release_path_locks,
     remove_from_pending,
     upsert_job,
 )
@@ -65,7 +70,14 @@ MAX_JOBS_PER_WORKER = 1
 PRIORITY_ORDER = {"P0": 0, "P1": 1, "P2": 2, "P3": 3, "P4": 4}
 
 # Job types that workers may execute. audit_only is auditor-side only.
-WORKER_JOB_TYPES = {"review_response", "pr_polish", "ci_fix_related_to_branch", "new_pr"}
+WORKER_JOB_TYPES = {
+    "review_response", "pr_polish", "ci_fix_related_to_branch", "new_pr",
+}
+
+# Sub-types that are coordinator-certified (require path lock acquisition)
+MUTATING_JOB_TYPES = {"review_response", "pr_polish", "ci_fix_related_to_branch", "new_pr"}
+
+
 
 
 def run(r: redis.Redis, cluster: str, config: dict) -> None:
@@ -136,6 +148,7 @@ def _tick(r: redis.Redis, cluster: str, lease_ttl: int, config: dict | None = No
     assigned_prs:      set[str] = set()
     assigned_branches: set[str] = set()
     assigned_workers:  set[str] = set()
+    assigned_paths:    set[str] = set()
 
     for job in pending:
         if active_worker_jobs >= GLOBAL_MAX_ACTIVE_WORKER_JOBS:
@@ -188,13 +201,57 @@ def _tick(r: redis.Redis, cluster: str, lease_ttl: int, config: dict | None = No
 
         wid = target_worker["node_id"]
 
-        # 8. Acquire all leases atomically
+        # 8. Acquire job/target/branch leases atomically
         ok, _ = acquire_job_leases(r, cluster, job, wid, lease_ttl)
         if not ok:
             logger.debug("Lease acquisition failed job=%s worker=%s", job.get("job_id"), wid)
             continue
 
-        # 9. Assign job
+        # 9. For mutating jobs, acquire path locks atomically before dispatch
+        path_keys = []
+        if job_type in MUTATING_JOB_TYPES:
+            write_set = _resolve_write_set(job, repo)
+            if write_set:
+                # Check for same-file conflicts with already-assigned paths this tick
+                conflict = False
+                for p in write_set:
+                    norm = normalize_path_for_lease(p)
+                    if norm and norm in assigned_paths:
+                        logger.debug(
+                            "Path %s already assigned this tick — skipping job %s",
+                            norm, job.get("job_id"),
+                        )
+                        conflict = True
+                        break
+                if conflict:
+                    # Release job leases since we're not dispatching
+                    _release_job_leases_safe(r, cluster, job, wid)
+                    continue
+
+                # Atomically acquire path locks via Lua
+                repo_slug = repo.replace("/", "_")
+                path_ok, blocked = acquire_path_locks_atomic(
+                    r, cluster, repo_slug, wid, job["job_id"], write_set, lease_ttl,
+                )
+                if not path_ok:
+                    logger.info(
+                        "Path lock acquisition failed for job=%s worker=%s — "
+                        "skipping dispatch. Blocked: %s",
+                        job.get("job_id"), wid, blocked,
+                    )
+                    # Release job leases since we're not dispatching this job
+                    _release_job_leases_safe(r, cluster, job, wid)
+                    continue
+
+                path_keys = [lease_path(cluster, repo_slug, normalize_path_for_lease(p))
+                             for p in write_set if normalize_path_for_lease(p)]
+                # Track assigned paths
+                for p in write_set:
+                    norm = normalize_path_for_lease(p)
+                    if norm:
+                        assigned_paths.add(norm)
+
+        # 10. Assign job
         job_id = job["job_id"]
         now    = datetime.now(timezone.utc).isoformat()
         upsert_job(r, cluster, {
@@ -203,13 +260,14 @@ def _tick(r: redis.Redis, cluster: str, lease_ttl: int, config: dict | None = No
             "assigned_node": wid,
             "lease_id":      f"lease_{job_id}",
             "assigned_at":   now,
+            "path_keys":     json.dumps(path_keys),
         })
 
         # Remove from pending stream
         if "_stream_id" in job:
             remove_from_pending(r, cluster, job["_stream_id"])
 
-        # 10. Update worker node state
+        # 11. Update worker node state
         r.hset(f"Workflow:{cluster}:node:{wid}", mapping={
             "status":     "active",
             "active_job": job_id,
@@ -241,6 +299,55 @@ def _tick(r: redis.Redis, cluster: str, lease_ttl: int, config: dict | None = No
         _process_submission_ready_jobs(r, cluster, config)
         _poll_auditor_verdict_files(r, cluster, config)
         _process_audit_results(r, cluster, config)
+
+
+def _resolve_write_set(job: dict, repo: str) -> list[str]:
+    """Extract the declared write set from job constraints.
+
+    Uses declared_write_set if present, falls back to allowed_paths.
+    Directories are included (coordinator will resolve to files at IMPLEMENT time).
+    """
+    constraints = job.get("constraints", {})
+    if isinstance(constraints, str):
+        try:
+            constraints = json.loads(constraints)
+        except (json.JSONDecodeError, TypeError):
+            constraints = {}
+
+    write_set = constraints.get("declared_write_set")
+    if write_set:
+        return list(write_set)
+
+    # Fallback to allowed_paths (logged as warning)
+    allowed = constraints.get("allowed_paths", [])
+    if allowed:
+        logger.warning(
+            "Job %s missing declared_write_set — falling back to allowed_paths",
+            job.get("job_id"),
+        )
+        return list(allowed)
+
+    return []
+
+
+def _release_job_leases_safe(
+    r: redis.Redis,
+    cluster: str,
+    job: dict,
+    worker_id: str,
+) -> None:
+    """Release job/target/branch leases. Best-effort, logs errors."""
+    try:
+        release_job_leases(
+            r, cluster,
+            job["job_id"],
+            job.get("repo", ""),
+            str(job.get("pr_number", "")),
+            job.get("head_branch", ""),
+            worker_id,
+        )
+    except Exception:
+        logger.exception("Failed to release job leases for job %s", job.get("job_id"))
 
 
 def _reap_stale_workers(
@@ -972,7 +1079,6 @@ def handle_submission_ready(
     nodes = list_nodes(r, cluster)
     workers = [n for n in nodes if _node_is_worker(n)]
     active_count = sum(1 for n in workers if n.get("status") == "active")
-    from coordinator import GLOBAL_MAX_ACTIVE_WORKER_JOBS
     within_limits = active_count <= GLOBAL_MAX_ACTIVE_WORKER_JOBS
     checks["global_limits"] = {"pass": within_limits, "reason": "" if within_limits else f"active={active_count} >= cap={GLOBAL_MAX_ACTIVE_WORKER_JOBS}"}
     if not within_limits:
