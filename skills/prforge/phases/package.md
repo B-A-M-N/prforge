@@ -218,6 +218,40 @@ Record in `state.json`:
 
 ---
 
+## Guard #9: Git State and Base Freshness Check (MANDATORY before any public action)
+
+Before generating `approval.md` for any action that touches GitHub (push, PR create,
+PR update, comment), run:
+
+```bash
+python3 $PRFORGE_HOME/scripts/git_state_check.py $ARTIFACT_DIR --repo $REPO_ROOT --md
+```
+
+This writes `$ARTIFACT_DIR/git_state.json` and `git_state.md`.
+
+**Hard blocks (exit 2 → `approval_status` = BLOCKED):**
+- Dirty worktree — uncommitted changes must be committed or stashed first
+- On a protected branch (main/master/develop) — all work must be on a feature branch
+- Branch tracks `upstream/` remote — push would target upstream, not fork
+- Branch is behind base — rebase required; do NOT push stale code
+- Branch has diverged from its tracking remote — resolve before push
+
+**Soft blocks (exit 1 → `approval_status` = READY_WITH_WARNINGS at best):**
+- `REBASE_REQUIRED` — base has moved since branch was cut
+- `REVIEW_REFRESH` — existing PR has failing/pending CI or new review comments
+
+**Degraded (exit 4 → record in warnings, do not crash):**
+- `DEGRADED_NO_GH` — gh unavailable; record in `warning_reasons`, continue with local info only
+
+**Rules:**
+- PRForge NEVER proposes or executes rebase automatically — it proposes, the user decides
+- `approval.md` MUST include `git_state.recommended_state` and the blocking/warning lists
+- `state.release.approval_status` cannot be `READY_TO_SHIP` when git state is `BLOCKED` or `REBASE_REQUIRED`
+
+Record in `state.json` under `git_state`.
+
+---
+
 ## PHASE EXIT GATE — PACKAGE
 
 Before advancing to APPROVAL, all of the following must be true:
@@ -226,6 +260,9 @@ Before advancing to APPROVAL, all of the following must be true:
 - [ ] All guards (1–10) have run and results recorded in `state.json`
 - [ ] Approval fingerprint hashes computed and recorded
 - [ ] `state.release.approval_status` set to READY_TO_SHIP, READY_WITH_WARNINGS, or BLOCKED
+- [ ] **Git state check run** — `git_state.json` written, recommendation recorded in `approval.md`
+- [ ] **`approval_status` is not READY_TO_SHIP when git state is BLOCKED or REBASE_REQUIRED**
+- [ ] **Quality weakness gate re-run** against final `approval.md` and `pr_body.md` — no new BLOCKING_WEAKNESS
 - [ ] `state.json` phase updated to `APPROVAL`
 
 **You may not commit, push, post, or create a PR from this point.
