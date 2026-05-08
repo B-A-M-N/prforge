@@ -166,94 +166,95 @@ Print: "Log: ~/.prforge-mesh/logs/coordinator.log"
 
 ## ACTION: `worker`
 
-Starts a worker daemon on this machine with a unique node ID. Each terminal running
-`/pr-distributed-local worker` gets its own daemon and its own config file — they must
-NOT share a config file or node ID.
+Starts a worker daemon. The daemon generates its own unique node ID at startup —
+do NOT generate an ID in bash and try to pass it in. That approach is fragile and
+has caused duplicate IDs. The config just needs `roles: ["worker"]`; the daemon
+handles everything else.
 
-### Step 1: Find mesh scripts and read coordinator config
+### Step 1: Write shared worker config (once — all workers reuse this file)
+
+```bash
+python3 << 'PYEOF'
+import json, sys
+from pathlib import Path
+
+coord_config_path = Path.home() / ".prforge-mesh" / "config.json"
+if not coord_config_path.exists():
+    print("ERROR: Coordinator config not found. Run /pr-distributed-local coordinator first.")
+    sys.exit(1)
+
+coord = json.loads(coord_config_path.read_text())
+redis_url = coord["mesh"]["redis_url"]
+cluster   = coord["mesh"]["cluster_name"]
+
+worker_config = {
+    "mesh": {
+        "cluster_name": cluster,
+        "node_id":      "auto",   # daemon generates a real UUID at startup
+        "roles":        ["worker"],
+        "redis_url":    redis_url,
+    },
+    "worker": {
+        "repo_roots": [str(Path.home())],
+        "capacity":   1,
+    },
+    "limits": {
+        "lease_ttl_seconds":        1800,
+        "heartbeat_interval_seconds": 15,
+    },
+    "notifications": {"desktop": False, "pubsub": True},
+}
+
+out = Path.home() / ".prforge-mesh" / "worker-template.json"
+out.write_text(json.dumps(worker_config, indent=2))
+print(f"✓ Worker template written: {out}")
+print(f"  cluster: {cluster}  redis: {redis_url}")
+PYEOF
+```
+
+### Step 2: Start worker daemon
+
+The daemon reads the template, then immediately replaces `node_id: auto` with a
+fresh `uuid4()` in memory. Each `nohup python3 prforge_mesh.py worker` invocation
+gets a different PID and a different UUID — no bash variable passing needed.
 
 ```bash
 MESH_SCRIPTS=$(python3 -c "from pathlib import Path; p = list(Path.home().rglob('prforge_mesh.py')); print(p[0].parent if p else 'NOT_FOUND')")
-echo "Mesh scripts: $MESH_SCRIPTS"
-
-if [ ! -f ~/.prforge-mesh/config.json ]; then
-  echo "ERROR: Coordinator config not found. Run /pr-distributed-local coordinator first."
+if [ "$MESH_SCRIPTS" = "NOT_FOUND" ]; then
+  echo "ERROR: prforge_mesh.py not found"
   exit 1
 fi
 
-REDIS_URL=$(python3 -c "import json; c=json.load(open('$HOME/.prforge-mesh/config.json')); print(c['mesh']['redis_url'])")
-CLUSTER=$(python3 -c "import json; c=json.load(open('$HOME/.prforge-mesh/config.json')); print(c['mesh']['cluster_name'])")
-echo "Redis: $REDIS_URL  Cluster: $CLUSTER"
-```
-
-### Step 2: Generate unique worker ID and write per-worker config
-
-Each worker needs its OWN config file with a unique node_id. Never reuse the coordinator
-config or another worker's config.
-
-```bash
-WORKER_ID=$(python3 -c "import uuid, socket; print('worker-' + socket.gethostname() + '-' + str(uuid.uuid4())[:8])")
-WORKER_CONFIG="$HOME/.prforge-mesh/worker-config-$WORKER_ID.json"
-
-REDIS_URL=$(python3 -c "import json; c=json.load(open('$HOME/.prforge-mesh/config.json')); print(c['mesh']['redis_url'])")
-CLUSTER=$(python3 -c "import json; c=json.load(open('$HOME/.prforge-mesh/config.json')); print(c['mesh']['cluster_name'])")
-
-cat > "$WORKER_CONFIG" <<EOF
-{
-  "mesh": {
-    "cluster_name": "$CLUSTER",
-    "node_id": "$WORKER_ID",
-    "roles": ["worker"],
-    "redis_url": "$REDIS_URL"
-  },
-  "worker": {
-    "repo_roots": ["$HOME"],
-    "capacity": 1
-  },
-  "limits": {
-    "lease_ttl_seconds": 1800,
-    "heartbeat_interval_seconds": 15
-  },
-  "notifications": {
-    "desktop": false,
-    "pubsub": true
-  }
-}
-EOF
-
-echo "✓ Worker config written: $WORKER_CONFIG"
-echo "  node_id: $WORKER_ID"
-```
-
-### Step 3: Start worker daemon
-
-```bash
-MESH_SCRIPTS=$(python3 -c "from pathlib import Path; p = list(Path.home().rglob('prforge_mesh.py')); print(p[0].parent if p else '')")
-LOG="$HOME/.prforge-mesh/logs/worker-$WORKER_ID.log"
-PID_FILE="$HOME/.prforge-mesh/worker-$WORKER_ID.pid"
-
 mkdir -p "$HOME/.prforge-mesh/logs"
 cd "$MESH_SCRIPTS"
-nohup python3 prforge_mesh.py --config "$WORKER_CONFIG" worker > "$LOG" 2>&1 &
+
+# Start daemon — use its own PID for log/pid file naming (unique per process)
+nohup python3 prforge_mesh.py --config "$HOME/.prforge-mesh/worker-template.json" worker \
+  > "$HOME/.prforge-mesh/logs/worker-startup-$$.log" 2>&1 &
 DAEMON_PID=$!
-echo $DAEMON_PID > "$PID_FILE"
+
+# Rename log to use daemon PID now that we have it
+mv "$HOME/.prforge-mesh/logs/worker-startup-$$.log" \
+   "$HOME/.prforge-mesh/logs/worker-$DAEMON_PID.log" 2>/dev/null || true
+echo $DAEMON_PID > "$HOME/.prforge-mesh/worker-$DAEMON_PID.pid"
+
 sleep 2
 
 if kill -0 "$DAEMON_PID" 2>/dev/null; then
-  echo "✓ Worker daemon started: $WORKER_ID (PID $DAEMON_PID)"
-  echo "  Config: $WORKER_CONFIG"
-  echo "  Log: $LOG"
-  tail -5 "$LOG"
+  WORKER_ID=$(grep "worker node_id:" "$HOME/.prforge-mesh/logs/worker-$DAEMON_PID.log" 2>/dev/null | awk '{print $NF}')
+  echo "✓ Worker daemon started (PID $DAEMON_PID)"
+  echo "  node_id: ${WORKER_ID:-<see log>}"
+  echo "  Log: $HOME/.prforge-mesh/logs/worker-$DAEMON_PID.log"
+  tail -5 "$HOME/.prforge-mesh/logs/worker-$DAEMON_PID.log"
 else
   echo "ERROR: Worker daemon failed to start"
-  cat "$LOG"
+  cat "$HOME/.prforge-mesh/logs/worker-$DAEMON_PID.log" 2>/dev/null
   exit 1
 fi
 ```
 
 Print: "✓ worker online — polling for jobs every 15s"
-Print: "Worker ID: $WORKER_ID"
-Print: "Log: ~/.prforge-mesh/logs/worker-<id>.log"
+Print the node_id and log path from the output above.
 
 ---
 

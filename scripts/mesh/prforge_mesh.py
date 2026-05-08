@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -57,12 +58,23 @@ def get_node_id(config: dict) -> str:
 # ---------------------------------------------------------------------------
 
 def cmd_worker(config: dict) -> None:
+    import socket
+    import uuid
     import redis_backend as rb
 
     roles = config["mesh"].get("roles", [])
     if "worker" not in roles:
         sys.exit(f"ERROR: This node has roles {roles}. "
                  "Cannot run worker loop without 'worker' role.")
+
+    # Always generate a fresh unique node_id at daemon startup.
+    # Multiple workers on the same machine share a config template — the ID
+    # must be minted here, in the process that owns it, never in a shell script
+    # or config file that can be shared or reused across sessions.
+    node_id = f"worker-{socket.gethostname()}-{uuid.uuid4().hex[:8]}"
+    config["mesh"]["node_id"] = node_id
+    print(f"worker node_id: {node_id}", flush=True)
+
     import worker as w
     r = rb.connect(config["mesh"]["redis_url"])
     w.run(r, get_cluster(config), config)
@@ -77,7 +89,26 @@ def cmd_coordinator(config: dict) -> None:
                  "Cannot run coordinator loop without 'coordinator' role.")
     import coordinator as c
     r = rb.connect(config["mesh"]["redis_url"])
-    c.run(r, get_cluster(config), config)
+
+    # Flush stale manually-registered nodes (TTL = -1) left over from previous
+    # sessions where the daemon was never actually started.  Live daemon nodes
+    # always have a TTL set by heartbeat(); anything without one is a ghost.
+    cluster = get_cluster(config)
+    _flush_stale_nodes(r, cluster)
+
+    c.run(r, cluster, config)
+
+
+def _flush_stale_nodes(r, cluster: str) -> None:
+    """Remove nodes with no TTL — they were registered by hand, not by a live daemon."""
+    nodes_key = f"Workflow:{cluster}:nodes"
+    for nid in list(r.smembers(nodes_key)):
+        nk = f"Workflow:{cluster}:node:{nid}"
+        ttl = r.ttl(nk)
+        if ttl == -1:  # no expiry = manually registered ghost
+            r.delete(nk)
+            r.srem(nodes_key, nid)
+            print(f"Flushed stale node: {nid}", flush=True)
 
 
 def cmd_auditor(config: dict) -> None:
