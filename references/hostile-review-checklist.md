@@ -42,11 +42,32 @@ Do not rationalize. If you wouldn't accept this PR from a stranger, fix it.
 - [ ] Did I mark un-run commands with reasons?
 - [ ] Does the PR body match what was actually validated?
 
+## Quality Weakness Scan (MANDATORY — run before writing verdict)
+
+Run: `python3 $PRFORGE_HOME/scripts/quality_weakness_gate.py $ARTIFACT_DIR`
+
+- [ ] **Exit code is 0** (or all findings addressed as documented below)
+- [ ] **No `BLOCKING_WEAKNESS` findings** — if present, verdict MUST be BLOCKED, not PASS
+  - Blocked phrases include: "LLM synthesizes", "gracefully handles empty", "no tests for",
+    "manual only", "not implemented", "placeholder", "low recall", "hides missing validation"
+- [ ] **All `REQUIRES_APPROVAL` findings** recorded in approval.md under `Known Tradeoffs`
+  - Blocked phrases include: "known tradeoff", "accepted for v1", "best effort", "probably",
+    "not ideal", "future improvement", "TODO", "degraded but acceptable"
+- [ ] **`ACCEPTABLE_LIMITATION` findings** verified to have tracking issue numbers
+
+> A self-review that writes verdict PASS while the gate would output BLOCKING_WEAKNESS is
+> a self-review failure — the verdict is invalid regardless of what was written.
+
 ## Git Safety
 - [ ] Is my branch tracking the correct remote (origin/fork)?
 - [ ] Am I pushing to my fork, not upstream?
 - [ ] Is my commit history clean and logical?
 - [ ] Did I avoid force-push (or justified it if needed)?
+- [ ] **Git state gate passed**: `python3 $PRFORGE_HOME/scripts/git_state_check.py $ARTIFACT_DIR --repo .`
+  - Branch is not on main/master/develop
+  - Worktree is clean (no uncommitted changes)
+  - Branch is not behind base (no rebase needed)
+  - Branch does not track upstream remote
 
 ## Maintainer Perception
 - [ ] Would a maintainer consider this PR small and reviewable?

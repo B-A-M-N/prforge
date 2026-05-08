@@ -131,18 +131,26 @@ from repo `.prforge-run`; see `references/artifact-location.md`.
 - [ ] Hostile review completed using `references/hostile-review-checklist.md`
 - [ ] `$ARTIFACT_DIR/hostile_review.md` written
 - [ ] All "no" or "unclear" answers addressed
+- [ ] **Quality weakness gate run**: `python3 $PRFORGE_HOME/scripts/quality_weakness_gate.py $ARTIFACT_DIR`
+- [ ] **No `BLOCKING_WEAKNESS` findings** in any artifact (blocks verdict PASS/APPROVE)
+- [ ] **All `REQUIRES_APPROVAL` items** recorded in `approval.md` under `Known Tradeoffs` or `Needs User Decision`
 
 ### Exit Criteria
-- [ ] Hostile review verdict is PASS
+- [ ] Hostile review verdict is PASS (impossible if BLOCKING_WEAKNESS exists)
 - [ ] Edge cases handled or documented
 - [ ] **Hostile review covers all required review items** (if review_decomposition.md exists):
   - Each required_change/blocker item has a corresponding finding in hostile_review.md
   - No generic "PASS — all good" without per-item coverage
+- [ ] Quality weakness gate recorded in `state.json` under `quality_weakness`
 
 ### Blockers (do not advance)
 - Hostile review found unresolved correctness issues
 - Alternate code paths might be broken
 - Tests missing for core fix
+- **`BLOCKING_WEAKNESS` in any artifact**: model compensates for missing evidence, manual-only validation,
+  placeholder implementation, or core code without any test coverage
+- **`REQUIRES_APPROVAL` not in approval.md**: any "known tradeoff", "accepted for v1", "probably",
+  "best effort", or deferred TODO without explicit maintainer sign-off in approval.md
 
 ---
 
@@ -154,18 +162,26 @@ from repo `.prforge-run`; see `references/artifact-location.md`.
 - [ ] PR body only includes validation commands that were actually run
 - [ ] `$ARTIFACT_DIR/approval.md` written using the approval template
 - [ ] Every item in `$ARTIFACT_DIR/dod.md` is either checked or has a documented exception
+- [ ] **Git state gate run**: `python3 $PRFORGE_HOME/scripts/git_state_check.py $ARTIFACT_DIR --repo $REPO_ROOT --md`
+- [ ] `$ARTIFACT_DIR/git_state.json` written with `recommended_state`
+- [ ] **Quality weakness gate re-run** on final `approval.md` and `pr_body.md` — no new BLOCKING_WEAKNESS
 
 ### Exit Criteria
 - [ ] Approval artifact is complete and scannable
 - [ ] Preflight check passes
 - [ ] Branch tracks correct remote (fork, not upstream)
 - [ ] `dod.md` status table populated in `approval.md` — no unchecked items without exception
+- [ ] `git_state.recommended_state` is `OK_TO_PUSH` or `DEGRADED_NO_GH` (not BLOCKED or REBASE_REQUIRED)
+- [ ] `approval_status` is not `READY_TO_SHIP` when git state is `BLOCKED` or `REBASE_REQUIRED`
 
 ### Blockers (do not advance)
 - Preflight check fails
 - PR body contains un-run validation claims
 - Branch tracks wrong remote
 - `dod.md` has unchecked implementation or test items
+- **Git state is BLOCKED**: dirty worktree, on protected branch, tracks upstream, diverged branch
+- **Git state is REBASE_REQUIRED**: branch is behind base — rebase first, do not ship stale code
+- **New BLOCKING_WEAKNESS in final approval.md or pr_body.md**
 
 ---
 

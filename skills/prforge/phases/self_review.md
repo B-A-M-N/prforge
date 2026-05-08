@@ -86,6 +86,36 @@ Committing `.prforge/state.json` or `$ARTIFACT_DIR/state.json` as repo content i
 
 Record in `state.json` under `artifact_exclusion`.
 
+## Guard #5b: Quality Weakness Scan (MANDATORY)
+
+Before writing `hostile_review.md`, run the quality weakness gate against all
+artifacts produced so far:
+
+```bash
+python3 $PRFORGE_HOME/scripts/quality_weakness_gate.py $ARTIFACT_DIR
+```
+
+**Classification rules:**
+
+| Class | Gate behavior |
+|-------|--------------|
+| `BLOCKING_WEAKNESS` | `hostile_review.md` verdict MUST be `BLOCKED`. Phase cannot advance to PACKAGE. Redirect to IMPLEMENT to fix. |
+| `REQUIRES_APPROVAL` | Item MUST appear verbatim in `approval.md` under a `Known Tradeoffs` or `Needs User Decision` section. `hostile_review.md` verdict is `NEEDS_FIX` until approval.md is written. |
+| `ACCEPTABLE_LIMITATION` | Log the finding. Verify a tracking issue number exists. Allowed with a note. |
+
+**What counts as BLOCKING_WEAKNESS (never self-approve):**
+
+- The LLM/model is relied on to synthesize output because the evidence path is empty
+- Core validation is "manual only" with no automated check
+- A changed file has "no tests for" it and coverage cannot be added locally
+- Missing implementation marked as placeholder/not implemented
+
+**Cannot write `hostile_review.md` verdict `PASS` or `APPROVE` if:**
+- Any `BLOCKING_WEAKNESS` is present in any scanned artifact
+- Any `REQUIRES_APPROVAL` item exists that is not yet in `approval.md`
+
+Record gate output path and worst severity in `state.json` under `quality_weakness`.
+
 ## Guard #6: Commit Hygiene Check
 
 Inspect all commits that will be part of the PR:
@@ -131,6 +161,9 @@ Before advancing to PACKAGE, all of the following must be true:
 - [ ] `hostile_review.md` written with verdict (PASS / NEEDS_FIX / BLOCKED)
 - [ ] All 10 key questions answered — any "no" resolved or escalated
 - [ ] `.prforge/` confirmed absent from git index (`git ls-files .prforge/` returns empty)
+- [ ] **Quality weakness gate run** (`quality_weakness_gate.py`) — exit 0, or all findings addressed
+- [ ] **No `BLOCKING_WEAKNESS` in any artifact** — if found, verdict is BLOCKED, not PASS
+- [ ] **All `REQUIRES_APPROVAL` items recorded in `approval.md`** before advancing
 - [ ] `state.json` phase updated to `SELF_REVIEW`
 
 **You may not commit, push, or run any git write operation from this point.
