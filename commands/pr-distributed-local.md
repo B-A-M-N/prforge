@@ -168,14 +168,14 @@ CLUSTER=$(echo "$CONFIG" | python3 -c "import json,sys; print(json.load(sys.stdi
 
 ### Step 2: Generate worker ID and register
 
+Each worker on this machine needs a unique ID. Always generate a fresh one — never
+reuse a shared file, since multiple workers run on the same box simultaneously.
+
 ```bash
-WORKER_ID="worker-$(hostname)-$$"
-# Or use a stable ID if available
-if [ -f ~/.prforge-mesh/worker-id ]; then
-  WORKER_ID=$(cat ~/.prforge-mesh/worker-id)
-else
-  echo "$WORKER_ID" > ~/.prforge-mesh/worker-id
-fi
+# Always generate a unique ID for this worker session (PID-scoped)
+WORKER_ID=$(python3 -c "import uuid, socket; print('worker-' + socket.gethostname() + '-' + str(uuid.uuid4())[:8])")
+# Write to a PID-scoped file so parallel workers don't share it
+echo "$WORKER_ID" > ~/.prforge-mesh/worker-id-$$
 
 python3 << PYEOF
 import json, redis, time
@@ -199,25 +199,15 @@ print(f"✓ Worker registered: {node_id}")
 PYEOF
 ```
 
-### Step 3: Write worker config for this session
+### Step 3: Confirm worker ID for this session
 
-The worker needs to know its own ID for lock checks:
+The worker ID lives in the env var `WORKER_ID` set above. Do NOT write it into
+`config.json` — that file is shared by all workers on this machine, and one worker
+would overwrite another's ID.
 
 ```bash
-# Add worker_id to the mesh config for this session
-python3 << 'PYEOF'
-import json
-from pathlib import Path
-
-config_path = Path.home() / ".prforge-mesh" / "config.json"
-config = json.loads(config_path.read_text())
-# Worker ID is written to a separate file for hooks to read
-worker_id_path = Path.home() / ".prforge-mesh" / "worker-id"
-if worker_id_path.exists():
-    config["worker_id"] = worker_id_path.read_text().strip()
-    config_path.write_text(json.dumps(config, indent=2))
-    print(f"✓ Worker ID set: {config['worker_id']}")
-PYEOF
+echo "✓ Worker ID for this session: $WORKER_ID"
+echo "  (stored in ~/.prforge-mesh/worker-id-$$ for hook reference)"
 ```
 
 ### Step 4: Export mesh env vars for the hook
@@ -344,8 +334,14 @@ PYEOF
 Stop ONLY this machine's node.
 
 ```bash
-python3 << 'PYEOF'
-import json, redis
+# PRFORGE_WORKER_ID is set when a worker session is active
+if [ -z "$PRFORGE_WORKER_ID" ]; then
+  echo "No active worker session found (PRFORGE_WORKER_ID not set)"
+  exit 0
+fi
+
+python3 << PYEOF
+import json, os, redis
 from pathlib import Path
 
 config_path = Path.home() / ".prforge-mesh" / "config.json"
@@ -353,11 +349,10 @@ if not config_path.exists():
     exit(0)
 
 config = json.loads(config_path.read_text())
-worker_id_path = Path.home() / ".prforge-mesh" / "worker-id"
-
-worker_id = ""
-if worker_id_path.exists():
-    worker_id = worker_id_path.read_text().strip()
+worker_id = os.environ.get("PRFORGE_WORKER_ID", "")
+if not worker_id:
+    print("No PRFORGE_WORKER_ID in environment — nothing to stop")
+    exit(0)
 
 r = redis.Redis.from_url(config["redis"]["url"], decode_responses=True)
 cluster = config["cluster"]
@@ -376,6 +371,15 @@ for lk in leases:
 
 # Remove from nodes set
 r.srem(f"Workflow:{cluster}:nodes", worker_id)
+
+# Clean up PID-scoped worker-id file if present
+import glob
+for f in glob.glob(str(Path.home() / ".prforge-mesh" / "worker-id-*")):
+    try:
+        if Path(f).read_text().strip() == worker_id:
+            Path(f).unlink()
+    except Exception:
+        pass
 
 print(f"✓ {worker_id} stopped")
 PYEOF
