@@ -267,16 +267,25 @@ def generate_postmortem(run_dir, output_path):
     state_path = run_dir / "state.json"
     state = _read_json(state_path, {})
 
-    run_id = _safe_get(state, "run_id", default="unknown-run")
-    repo = _safe_get(state, "repo", default="unknown-repo")
+    run_id = _safe_get(state, "run_id", default=None) or os.path.basename(str(run_dir))
+    repo_raw = _safe_get(state, "repo", default=None)
     pr_data = _safe_get(state, "pr") or {}
+    if isinstance(repo_raw, dict):
+        # PRForge state.json stores repo as an object — extract a string identifier
+        repo = (repo_raw.get("github")
+                or os.path.basename((repo_raw.get("local_path") or "").rstrip("/"))
+                or "unknown-repo")
+        branch = (repo_raw.get("working_branch")
+                  or _safe_get(state, "branch", default=pr_data.get("branch", "unknown")))
+    else:
+        repo = repo_raw or "unknown-repo"
+        branch = _safe_get(state, "branch", default=pr_data.get("branch", "unknown"))
     pr_number = _safe_get(state, "pr_number") or pr_data.get("number") or 0
     if isinstance(pr_number, str):
         try:
             pr_number = int(pr_number)
         except ValueError:
             pr_number = 0
-    branch = _safe_get(state, "branch", default=pr_data.get("branch", "unknown"))
     outcome = _safe_get(state, "outcome", default="UNKNOWN").upper()
     phase = _safe_get(state, "phase", default="")
     merged_at = _safe_get(state, "merged_at", default=now)

@@ -82,6 +82,8 @@ def get_postmortem_summary(postmortem_json_str):
         return {}
 
     summary = pm.get("summary", {})
+    if not isinstance(summary, dict):
+        return {}
     evidence_json = pm.get("evidence", {})
 
     # Evidence refs by category
@@ -201,17 +203,24 @@ def cmd_index(args):
         postmortem_data = json.load(f)
 
     # Extract postmortem metadata
-    postmortem_id = postmortem_data.get("id", "unknown")
     run_id = postmortem_data.get("run_id", "")
     if not run_id and run_dir:
-        # Try to derive run_id from run_dir name
         run_id = os.path.basename(os.path.abspath(run_dir))
 
     if not run_id:
         print("ERROR: Could not determine run_id from postmortem or run_dir", file=sys.stderr)
         sys.exit(1)
 
-    repo = postmortem_data.get("repo", "")
+    postmortem_id = postmortem_data.get("id") or f"{run_id}-postmortem"
+
+    repo_raw = postmortem_data.get("repo", "")
+    if isinstance(repo_raw, dict):
+        # postmortem was written with an object-form repo (pre-fix generator output)
+        repo = (repo_raw.get("github")
+                or os.path.basename((repo_raw.get("local_path") or "").rstrip("/"))
+                or "")
+    else:
+        repo = str(repo_raw) if repo_raw else ""
     confidence = postmortem_data.get("confidence", "medium")
 
     # Step: Verify artifacts before indexing
@@ -247,6 +256,12 @@ def cmd_index(args):
     lessons_processed = 0
 
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+    # Seed FK parent run row so postmortem insert does not violate FK constraint
+    conn.execute("""
+        INSERT OR IGNORE INTO runs (run_id, repo, started_at, run_dir)
+        VALUES (?, ?, ?, ?)
+    """, (run_id, repo, now, run_dir or ""))
 
     conn.execute("""
         INSERT OR IGNORE INTO postmortems (id, run_id, repo, pr_number, outcome,

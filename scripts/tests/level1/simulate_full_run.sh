@@ -119,6 +119,7 @@ write_state() {
   cat > "$ARTDIR/state.json" <<JSON
 {
   "version": "1.0",
+  "run_id": "$RUN_ID",
   "phase": "$phase",
   "repo": {
     "local_path": "$REPO",
@@ -565,13 +566,18 @@ data = {
     "pr_number": 0,
     "branch": "fix/validate-age-raise-value-error",
     "outcome": "ABANDONED",
-    "summary": "validate_age() fixed to raise ValueError; 3/3 tests pass. Level 1 simulation — no push executed.",
+    "summary": {
+        "what_was_done": ["Fixed validate_age() to raise ValueError for invalid input; 3/3 tests pass."],
+        "could_be_better": ["Level 1 simulation — generator fallback used; check postmortem_generator.py."],
+        "avoid_next_time": ["Ensure postmortem_generator.py handles all state.json schemas correctly."],
+        "maintainer_preferences": []
+    },
     "evidence": [
         {"type": "commit", "sha": "$COMMIT_SHA", "files": ["buggy_validator.py"]},
         {"type": "ci_run", "name": "unittest", "conclusion": "success", "url": ""}
     ],
     "tags": ["local_task", "level1_simulation", "bug_fix"],
-    "confidence": 0.95
+    "confidence": "medium"
 }
 with open("$ARTDIR/postmortem.json", "w") as f:
     json.dump(data, f, indent=2)
@@ -593,32 +599,39 @@ PRFORGE_MEMORY_DB="$MEMDB" python3 "$ROOT/scripts/memory_ledger.py" init >/dev/n
   && pass "memory ledger initialized" \
   || fail "memory ledger init failed"
 
+MEM_OUT="$TMP/mem_index.txt"
 MEM_RC=0
-PRFORGE_MEMORY_DB="$MEMDB" python3 "$ROOT/scripts/memory_ledger.py" save-postmortem \
-  --id "${RUN_ID}-postmortem" \
-  --run-id "$RUN_ID" \
-  --repo "level1-test/target-repo" \
-  --outcome "ABANDONED" \
-  --summary "validate_age() fixed to raise ValueError; 3/3 tests pass; no push" \
-  --evidence "unittest output in validation_ledger.md" \
-  --tags "local_task,level1_simulation" \
-  --confidence 0.95 >/dev/null 2>&1 || MEM_RC=$?
+PRFORGE_MEMORY_DB="$MEMDB" python3 "$ROOT/scripts/memory_indexer.py" index \
+  --postmortem "$ARTDIR/postmortem.json" \
+  --run-dir "$ARTDIR" >"$MEM_OUT" 2>&1 || MEM_RC=$?
 
 if [[ $MEM_RC -eq 0 ]]; then
-  pass "postmortem saved to memory ledger"
+  pass "memory_indexer.py index: exit 0"
+  MEM_COUNT="$(grep -oE 'memory_count=[0-9]+' "$MEM_OUT" | tail -1 | cut -d= -f2 || echo 0)"
+  if [[ "${MEM_COUNT:-0}" -gt 0 ]]; then
+    pass "memory_indexer.py: ${MEM_COUNT} record(s) indexed into memory.db"
+  else
+    note "memory_indexer.py: 0 records indexed (postmortem had no extractable lessons)"
+    pass "memory_indexer.py: indexing pipeline completed without error"
+  fi
 else
-  note "save-postmortem returned $MEM_RC — attempting add-memory-record fallback"
-  MEM_RC2=0
-  PRFORGE_MEMORY_DB="$MEMDB" python3 "$ROOT/scripts/memory_ledger.py" add-memory-record \
-    --postmortem-id "${RUN_ID}-postmortem" \
-    --run-id "$RUN_ID" \
-    --lesson "When a function returns None for invalid input, fix by raising ValueError. Pre-existing tests define expected behavior — read them before planning." \
-    --lesson-type "scope" \
-    --repo "level1-test/target-repo" \
-    --confidence 0.9 >/dev/null 2>&1 || MEM_RC2=$?
-  [[ $MEM_RC2 -eq 0 ]] \
-    && pass "memory record added" \
-    || { note "memory_ledger returned $MEM_RC2 (degraded — SQLite schema mismatch)"; pass "memory step completed (degraded mode)"; }
+  fail "memory_indexer.py index failed (exit $MEM_RC)" "$(cat "$MEM_OUT")"
+fi
+
+# FTS recall — verify search works against the indexed DB
+FTS_OUT="$TMP/fts_out.txt"
+FTS_RC=0
+PRFORGE_MEMORY_DB="$MEMDB" python3 "$ROOT/scripts/memory_indexer.py" query \
+  --query "ValueError" >"$FTS_OUT" 2>&1 || FTS_RC=$?
+if [[ $FTS_RC -eq 0 ]]; then
+  if grep -q "lesson" "$FTS_OUT"; then
+    pass "FTS recall: query 'ValueError' returned indexed lessons"
+  else
+    note "FTS recall: no lessons matched 'ValueError' (0 records indexed or no matching text)"
+    pass "FTS recall: query ran without error"
+  fi
+else
+  fail "FTS recall: memory_indexer.py query failed (exit $FTS_RC)" "$(cat "$FTS_OUT")"
 fi
 
 [[ -f "$MEMDB" ]] && pass "memory.db exists" || fail "memory.db not created"

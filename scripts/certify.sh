@@ -95,11 +95,18 @@ run_python_test "git_state_check tests (8)" \
   "$ROOT/scripts/tests/git_state/test_git_state_check.py"
 
 # Memory tests
-if [[ -f "$ROOT/scripts/tests/memory/test_memory_ledger.py" ]]; then
-  run_python_test "memory ledger tests" \
-    "$ROOT/scripts/tests/memory/test_memory_ledger.py"
+if [[ -f "$ROOT/scripts/tests/memory/test_memory_indexing_regression.py" ]]; then
+  run_python_test "memory indexing regression tests" \
+    "$ROOT/scripts/tests/memory/test_memory_indexing_regression.py"
 else
-  skip "memory ledger tests (not found)"
+  skip "memory indexing regression tests (not found)"
+fi
+
+if [[ -f "$ROOT/scripts/tests/memory/test_memory_pipeline.py" ]]; then
+  run_python_test "memory pipeline tests (generator→indexer→FTS)" \
+    "$ROOT/scripts/tests/memory/test_memory_pipeline.py"
+else
+  skip "memory pipeline tests (not found)"
 fi
 
 # Discovery tests
