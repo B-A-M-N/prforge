@@ -599,6 +599,124 @@ PY
       "SELF_REVIEW"
     exit 1
   fi
+
+  # --- Quality Weakness Gate (mandatory before SELF_REVIEW → PACKAGE) ---
+  QW_GATE="$SCRIPT_DIR/../scripts/quality_weakness_gate.py"
+  if [ -f "$QW_GATE" ]; then
+    QW_OUT="$(python3 "$QW_GATE" "$HARNESS_DIR" 2>&1)" || QW_RC=$?
+    QW_RC="${QW_RC:-0}"
+    if [ "$QW_RC" -eq 2 ]; then
+      echo ""
+      echo "=== PRForge Quality Weakness Gate — BLOCKED ==="
+      echo "$QW_OUT"
+      echo ""
+      echo "hostile_review.md or other artifacts contain BLOCKING_WEAKNESS patterns."
+      echo "The LLM cannot self-approve evidence it is compensating for."
+      echo "Fix the weakness (real evidence, real tests, real implementation) then retry."
+      exit 1
+    elif [ "$QW_RC" -eq 1 ]; then
+      # REQUIRES_APPROVAL — check that approval.md exists and is non-empty
+      APPROVAL_MD="$HARNESS_DIR/approval.md"
+      if [ ! -f "$APPROVAL_MD" ] || [ "$(wc -c < "$APPROVAL_MD")" -lt 50 ]; then
+        echo ""
+        echo "=== PRForge Quality Weakness Gate — REQUIRES_APPROVAL ==="
+        echo "$QW_OUT"
+        echo ""
+        echo "Artifacts contain REQUIRES_APPROVAL patterns (known tradeoffs, TODO items, deferred work)."
+        echo "These must appear explicitly in approval.md under 'Known Tradeoffs' or 'Needs User Decision'."
+        echo "Write approval.md with the tradeoff listed, then retry."
+        exit 1
+      fi
+    fi
+  fi
+fi
+
+
+# --- PACKAGE → APPROVAL: git state must be OK before any public action ---
+if [ "$TRANSITION" = "PACKAGE:APPROVAL" ]; then
+  HARNESS_DIR="$(dirname "$FILE_PATH")"
+  GS_GATE="$SCRIPT_DIR/../scripts/git_state_check.py"
+  GIT_STATE_JSON="$HARNESS_DIR/git_state.json"
+
+  if [ -f "$GS_GATE" ]; then
+    # Determine repo root
+    GS_REPO_ROOT=$(PRFORGE_STATE_CONTENT="$CONTENT" python3 - <<'PY'
+import json, os
+try:
+    d = json.loads(os.environ.get("PRFORGE_STATE_CONTENT","{}"))
+    p = d.get("repo", {}).get("local_path", "")
+    print(p if p else "")
+except Exception:
+    print("")
+PY
+)
+    [ -n "$GS_REPO_ROOT" ] || GS_REPO_ROOT=$(git -C "$HARNESS_DIR" rev-parse --show-toplevel 2>/dev/null || echo "$HARNESS_DIR")
+
+    GS_RC=0
+    python3 "$GS_GATE" "$HARNESS_DIR" --repo "$GS_REPO_ROOT" >/tmp/prforge-gs-$$.out 2>&1 || GS_RC=$?
+
+    if [ "$GS_RC" -eq 2 ]; then
+      echo ""
+      echo "=== PRForge Git State Gate — BLOCKED ==="
+      cat /tmp/prforge-gs-$$.out 2>/dev/null || true
+      echo ""
+      echo "Branch state blocks public action."
+      echo "See $GIT_STATE_JSON for details. Fix the git state then retry."
+      rm -f /tmp/prforge-gs-$$.out
+      exit 1
+    elif [ "$GS_RC" -eq 1 ]; then
+      echo ""
+      echo "=== PRForge Git State Gate — WARNING ==="
+      cat /tmp/prforge-gs-$$.out 2>/dev/null || true
+      echo ""
+      echo "Git state has warnings (REBASE_REQUIRED or REVIEW_REFRESH)."
+      echo "approval_status cannot be READY_TO_SHIP until resolved."
+      echo "Continuing to APPROVAL phase with READY_WITH_WARNINGS at best."
+    fi
+    rm -f /tmp/prforge-gs-$$.out 2>/dev/null || true
+  else
+    # Gate script missing — warn but don't block (guard absent isn't a hard blocker)
+    echo "WARNING: git_state_check.py not found at $GS_GATE — git state not verified" >&2
+  fi
+
+  # Require git_state.json to be present in artifact dir
+  if [ ! -f "$GIT_STATE_JSON" ]; then
+    echo ""
+    echo "=== PRForge Git State Gate — MISSING ARTIFACT ==="
+    echo "git_state.json not found in $HARNESS_DIR"
+    echo "Run: python3 \$PRFORGE_HOME/scripts/git_state_check.py \$ARTIFACT_DIR --repo \$REPO_ROOT --md"
+    echo "Then retry the PACKAGE → APPROVAL transition."
+    exit 1
+  fi
+
+  # Verify recommended_state is not hard-blocked
+  GIT_STATE_REC=$(python3 - "$GIT_STATE_JSON" <<'PY'
+import json, sys
+try:
+    d = json.loads(open(sys.argv[1]).read())
+    print(d.get("recommended_state", "UNKNOWN"))
+except Exception:
+    print("UNKNOWN")
+PY
+)
+  if [ "$GIT_STATE_REC" = "BLOCKED" ] || [ "$GIT_STATE_REC" = "REBASE_REQUIRED" ]; then
+    echo ""
+    echo "=== PRForge Git State Gate — BLOCKED ==="
+    echo "git_state.json reports recommended_state=$GIT_STATE_REC"
+    echo "Public action blocked. Resolve the git state issue first:"
+    python3 - "$GIT_STATE_JSON" <<'PY'
+import json, sys
+try:
+    d = json.loads(open(sys.argv[1]).read())
+    for r in d.get("blocking_reasons", []):
+        print(f"  BLOCKED: {r}")
+    for w in d.get("warning_reasons", []):
+        print(f"  WARNING: {w}")
+except Exception:
+    pass
+PY
+    exit 1
+  fi
 fi
 
 

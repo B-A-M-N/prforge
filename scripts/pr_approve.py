@@ -254,6 +254,36 @@ def verify_command(repo: Path, artifact_dir: Path, command: str) -> tuple[bool, 
         if not (artifact_dir / name).is_file():
             issues.append(f"required artifact missing: {name}")
 
+    # --- Git state gate: git_state.json must exist and not be BLOCKED ---
+    git_state_path = artifact_dir / "git_state.json"
+    if not git_state_path.is_file():
+        issues.append(
+            "git_state.json missing — run git_state_check.py before packaging; "
+            "public action cannot proceed without base freshness verification"
+        )
+    else:
+        try:
+            git_state = json.loads(git_state_path.read_text(encoding="utf-8"))
+            git_rec = git_state.get("recommended_state", "UNKNOWN")
+            if git_rec in ("BLOCKED", "REBASE_REQUIRED"):
+                blocking = git_state.get("blocking_reasons", [])
+                summary = "; ".join(blocking[:3]) if blocking else git_rec
+                issues.append(
+                    f"git_state.recommended_state is {git_rec!r} — {summary}; "
+                    "resolve before public action"
+                )
+        except Exception as exc:
+            issues.append(f"git_state.json unreadable: {exc}")
+
+    # --- Quality weakness gate: state.quality_weakness must not be BLOCKING_WEAKNESS ---
+    qw = state.get("quality_weakness") or {}
+    qw_worst = qw.get("worst_severity", "")
+    if qw_worst == "BLOCKING_WEAKNESS":
+        issues.append(
+            "state.quality_weakness.worst_severity is BLOCKING_WEAKNESS — "
+            "self-review cannot approve while core weaknesses are unresolved"
+        )
+
     stored_diff = approval.get("diff_hash") or ""
     current_diff = full_diff_hash(repo)
     if stored_diff and stored_diff != current_diff:

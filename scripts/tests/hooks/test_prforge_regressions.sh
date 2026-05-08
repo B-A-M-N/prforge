@@ -222,6 +222,14 @@ pass "validation evidence rejects unrun command claims"
 
 git add a.txt
 git commit -q -m "update fixture"
+# git_state.json is now required by pr_approve.py — add a clean state fixture
+cat > .prforge/git_state.json <<'JSON'
+{"recommended_state": "OK_TO_PUSH", "blocking_reasons": [], "warning_reasons": [],
+ "git": {"branch": "master", "head_sha": "fixture", "commits_ahead": 1,
+         "commits_behind": 0, "dirty_worktree": false, "on_protected_branch": false,
+         "tracks_upstream": false},
+ "gh": {"gh_available": false}}
+JSON
 cat > .prforge/approval.md <<'EOF'
 # Approval
 
@@ -402,3 +410,288 @@ if ! printf '%s' "$MESH_JSON" | \
   fail "mesh lock guard failed without CLAUDE_PLUGIN_ROOT"
 fi
 pass "mesh hook resolves guard without plugin root or home scan"
+
+# ─── Quality Weakness Gate: mechanical enforcement tests ──────────────────────
+
+QW_REPO="$TMP/qw-repo"
+mkdir -p "$QW_REPO/.prforge"
+git -C "$QW_REPO" init -q
+git -C "$QW_REPO" config user.email test@example.com
+git -C "$QW_REPO" config user.name Test
+printf 'x\n' > "$QW_REPO/x.txt"
+git -C "$QW_REPO" add x.txt
+git -C "$QW_REPO" commit -q -m "init"
+
+# Test 1: hostile_review.md with BLOCKING_WEAKNESS language blocks SELF_REVIEW→PACKAGE
+# The hook fires when state.json is written with a new phase — use .prforge/state.json path
+cat > "$QW_REPO/.prforge/hostile_review.md" <<'EOF'
+# Hostile Review
+
+## Verdict: PASS
+
+## Findings
+The search mechanism uses accepted for v1 behavior. LLM can synthesize from empty results.
+
+## Required Follow-up
+None.
+EOF
+# Write current state (SELF_REVIEW) — hook reads file_path and content
+cat > "$QW_REPO/.prforge/state.json" <<JSON
+{
+  "version": "1.0",
+  "phase": "SELF_REVIEW",
+  "repo": {"local_path": "$QW_REPO", "base_branch": "main", "working_branch": "feat/x"},
+  "task": {"type": "local_task", "objective": "test quality gate"},
+  "permissions": {}
+}
+JSON
+NEW_STATE_CONTENT='{"version":"1.0","phase":"PACKAGE","repo":{"local_path":"'"$QW_REPO"'","base_branch":"main","working_branch":"feat/x"},"task":{"type":"local_task","objective":"test quality gate"},"permissions":{}}'
+BOUNDARY_JSON="$(python3 - <<PY
+import json
+print(json.dumps({
+  "tool_input": {
+    "file_path": "$QW_REPO/.prforge/state.json",
+    "content": '{"version":"1.0","phase":"PACKAGE","repo":{"local_path":"'"$QW_REPO"'","base_branch":"main","working_branch":"feat/x"},"task":{"type":"local_task","objective":"test quality gate"},"permissions":{}}'
+  }
+}))
+PY
+)"
+if printf '%s' "$BOUNDARY_JSON" | bash "$ROOT/hooks/phase-boundary.sh" >"$TMP/qw-boundary.out" 2>"$TMP/qw-boundary.err"; then
+  fail "phase-boundary allowed SELF_REVIEW→PACKAGE with BLOCKING_WEAKNESS in hostile_review.md"
+fi
+if ! grep -qiE 'quality.weakness|blocking.weakness|llm|synthesize|accepted.for' "$TMP/qw-boundary.err" "$TMP/qw-boundary.out" 2>/dev/null; then
+  echo "--- boundary stdout ---" >&2
+  cat "$TMP/qw-boundary.out" >&2 || true
+  echo "--- boundary stderr ---" >&2
+  cat "$TMP/qw-boundary.err" >&2 || true
+  fail "quality weakness gate did not mention the blocking pattern"
+fi
+pass "quality weakness gate blocks SELF_REVIEW→PACKAGE with BLOCKING_WEAKNESS in hostile_review"
+
+# Test 2: pr_body.md with "LLM can synthesize from empty results" blocks READY_TO_SHIP
+PR_BODY_REPO="$TMP/pr-body-repo"
+PR_BODY_ART="$TMP/pr-body-artifacts"
+mkdir -p "$PR_BODY_REPO" "$PR_BODY_ART"
+git -C "$PR_BODY_REPO" init -q
+git -C "$PR_BODY_REPO" config user.email test@example.com
+git -C "$PR_BODY_REPO" config user.name Test
+printf 'y\n' > "$PR_BODY_REPO/y.txt"
+git -C "$PR_BODY_REPO" add y.txt
+git -C "$PR_BODY_REPO" commit -q -m "init"
+
+# Write git_state.json (OK) so only the quality weakness gate fires
+cat > "$PR_BODY_ART/git_state.json" <<'JSON'
+{"recommended_state": "OK_TO_PUSH", "blocking_reasons": [], "warning_reasons": [],
+ "git": {"branch": "feature/test", "head_sha": "abc123", "commits_ahead": 1,
+         "commits_behind": 0, "dirty_worktree": false, "on_protected_branch": false,
+         "tracks_upstream": false},
+ "gh": {"gh_available": false}}
+JSON
+cat > "$PR_BODY_ART/pr_body.md" <<'EOF'
+## Summary
+The LLM can synthesize from empty results so the search quality doesn't matter.
+
+## Validation
+- dotnet build — passed
+EOF
+cat > "$PR_BODY_ART/approval.md" <<'EOF'
+# Approval
+Approved command: git push origin feat/test
+EOF
+cat > "$PR_BODY_ART/validation_ledger.md" <<'EOF'
+# Validation Ledger
+## dotnet build
+Status: passed
+Output: Build succeeded. 0 Errors.
+This entry is long enough to be treated as real evidence by the verifier.
+EOF
+cat > "$PR_BODY_ART/dod.md" <<'EOF'
+# Definition of Done
+- [x] Build passes
+EOF
+APPROVAL_HASH=$(sha256sum "$PR_BODY_ART/approval.md" | awk '{print $1}')
+VAL_HASH=$(sha256sum "$PR_BODY_ART/validation_ledger.md" | awk '{print $1}')
+DOD_HASH=$(sha256sum "$PR_BODY_ART/dod.md" | awk '{print $1}')
+DIFF_HASH=$(python3 - <<PY
+import hashlib, subprocess
+cwd = "$PR_BODY_REPO"
+u = subprocess.run(["git", "diff", "--binary", "--full-index"], capture_output=True, cwd=cwd).stdout
+s = subprocess.run(["git", "diff", "--cached", "--binary", "--full-index"], capture_output=True, cwd=cwd).stdout
+print(hashlib.sha256(u + b"\0PRFORGE-STAGED\0" + s).hexdigest())
+PY
+)
+cat > "$PR_BODY_ART/state.json" <<JSON
+{
+  "version": "1.0",
+  "phase": "APPROVAL",
+  "release": {"approval_status": "READY_TO_SHIP"},
+  "quality_weakness": {"worst_severity": "BLOCKING_WEAKNESS", "count": 1},
+  "approval": {
+    "approval_id": "test-approval-1",
+    "approved": true,
+    "approved_actions": ["push"],
+    "diff_hash": "$DIFF_HASH",
+    "validation_hash": "$VAL_HASH",
+    "approval_md_hash": "$APPROVAL_HASH"
+  },
+  "dod": {"generation_hash": "$DOD_HASH"}
+}
+JSON
+if python3 "$ROOT/scripts/pr_approve.py" --repo "$PR_BODY_REPO" --artifact-dir "$PR_BODY_ART" \
+  "git push origin feat/test" >"$TMP/qw-approve.out" 2>&1; then
+  fail "pr_approve.py allowed push with BLOCKING_WEAKNESS quality gate state"
+fi
+if ! grep -qiE 'blocking.weakness|quality.weakness' "$TMP/qw-approve.out"; then
+  echo "--- approve output ---" >&2
+  cat "$TMP/qw-approve.out" >&2
+  fail "pr_approve.py did not mention quality_weakness blocking reason"
+fi
+pass "pr_approve.py blocks READY_TO_SHIP when quality_weakness.worst_severity=BLOCKING_WEAKNESS"
+
+# Test 3+4+5: git_state_check.py behaviors (dirty, upstream, clean)
+# These are tested in scripts/tests/git_state/test_git_state_check.py
+# Verify here that pr_approve.py blocks when git_state.json is BLOCKED
+GS_BLOCKED_ART="$TMP/gs-blocked-art"
+GS_BLOCKED_REPO="$TMP/gs-blocked-repo"
+mkdir -p "$GS_BLOCKED_ART" "$GS_BLOCKED_REPO"
+git -C "$GS_BLOCKED_REPO" init -q
+git -C "$GS_BLOCKED_REPO" config user.email test@example.com
+git -C "$GS_BLOCKED_REPO" config user.name Test
+printf 'z\n' > "$GS_BLOCKED_REPO/z.txt"
+git -C "$GS_BLOCKED_REPO" add z.txt
+git -C "$GS_BLOCKED_REPO" commit -q -m "init"
+# Test 3: dirty worktree state blocks pr_approve.py
+cat > "$GS_BLOCKED_ART/git_state.json" <<'JSON'
+{"recommended_state": "BLOCKED",
+ "blocking_reasons": ["dirty worktree (1 file(s) uncommitted)"],
+ "warning_reasons": [],
+ "git": {"branch": "feature/dirty", "head_sha": "abc", "commits_ahead": 1,
+         "commits_behind": 0, "dirty_worktree": true, "on_protected_branch": false,
+         "tracks_upstream": false, "dirty_files": ["README.md"]},
+ "gh": {"gh_available": false}}
+JSON
+# Test 4: branch tracking upstream blocks pr_approve.py
+cat > "$GS_BLOCKED_ART/git_state_upstream.json" <<'JSON'
+{"recommended_state": "BLOCKED",
+ "blocking_reasons": ["branch tracks upstream (upstream/main) — push would target the upstream"],
+ "warning_reasons": [],
+ "git": {"branch": "feature/upstream", "head_sha": "def", "commits_ahead": 1,
+         "commits_behind": 0, "dirty_worktree": false, "on_protected_branch": false,
+         "tracks_upstream": true, "tracking_branch": "upstream/main"},
+ "gh": {"gh_available": false}}
+JSON
+cp "$PR_BODY_ART/approval.md" "$GS_BLOCKED_ART/"
+cp "$PR_BODY_ART/validation_ledger.md" "$GS_BLOCKED_ART/"
+cp "$PR_BODY_ART/dod.md" "$GS_BLOCKED_ART/"
+APPROVAL_HASH2=$(sha256sum "$GS_BLOCKED_ART/approval.md" | awk '{print $1}')
+VAL_HASH2=$(sha256sum "$GS_BLOCKED_ART/validation_ledger.md" | awk '{print $1}')
+DOD_HASH2=$(sha256sum "$GS_BLOCKED_ART/dod.md" | awk '{print $1}')
+DIFF_HASH2=$(python3 - <<PY
+import hashlib, subprocess
+cwd = "$GS_BLOCKED_REPO"
+u = subprocess.run(["git", "diff", "--binary", "--full-index"], capture_output=True, cwd=cwd).stdout
+s = subprocess.run(["git", "diff", "--cached", "--binary", "--full-index"], capture_output=True, cwd=cwd).stdout
+print(hashlib.sha256(u + b"\0PRFORGE-STAGED\0" + s).hexdigest())
+PY
+)
+cat > "$GS_BLOCKED_ART/state.json" <<JSON
+{
+  "version": "1.0", "phase": "APPROVAL",
+  "release": {"approval_status": "READY_TO_SHIP"},
+  "approval": {
+    "approval_id": "gs-test",
+    "approved": true,
+    "approved_actions": ["push"],
+    "diff_hash": "$DIFF_HASH2",
+    "validation_hash": "$VAL_HASH2",
+    "approval_md_hash": "$APPROVAL_HASH2"
+  },
+  "dod": {"generation_hash": "$DOD_HASH2"}
+}
+JSON
+if python3 "$ROOT/scripts/pr_approve.py" --repo "$GS_BLOCKED_REPO" --artifact-dir "$GS_BLOCKED_ART" \
+  "git push origin feature/dirty" >"$TMP/gs-approve.out" 2>&1; then
+  fail "pr_approve.py allowed push with git_state=BLOCKED (dirty worktree)"
+fi
+if ! grep -qiE 'git_state|dirty|BLOCKED|REBASE' "$TMP/gs-approve.out"; then
+  cat "$TMP/gs-approve.out" >&2
+  fail "pr_approve.py did not mention git_state blocking reason"
+fi
+pass "pr_approve.py blocks public action when git_state.recommended_state=BLOCKED"
+
+# Test 5: clean feature branch with OK_TO_PUSH state allows pr_approve.py
+GS_OK_ART="$TMP/gs-ok-art"
+GS_OK_REPO="$TMP/gs-ok-repo"
+mkdir -p "$GS_OK_ART" "$GS_OK_REPO"
+git -C "$GS_OK_REPO" init -q
+git -C "$GS_OK_REPO" config user.email test@example.com
+git -C "$GS_OK_REPO" config user.name Test
+printf 'ok\n' > "$GS_OK_REPO/ok.txt"
+git -C "$GS_OK_REPO" add ok.txt
+git -C "$GS_OK_REPO" commit -q -m "init"
+cat > "$GS_OK_ART/git_state.json" <<'JSON'
+{"recommended_state": "OK_TO_PUSH", "blocking_reasons": [], "warning_reasons": [],
+ "git": {"branch": "feature/clean", "head_sha": "aaa", "commits_ahead": 1,
+         "commits_behind": 0, "dirty_worktree": false, "on_protected_branch": false,
+         "tracks_upstream": false},
+ "gh": {"gh_available": false}}
+JSON
+cat > "$GS_OK_ART/approval.md" <<'EOF'
+# Approval
+
+## Git State
+recommended_state: OK_TO_PUSH
+
+## Quality Weakness Gate
+worst_severity: none
+
+Approved command: git push origin feature/clean
+EOF
+cat > "$GS_OK_ART/validation_ledger.md" <<'EOF'
+# Validation Ledger
+## pytest
+Status: passed
+Output: 42 tests passed.
+This ledger is long enough to be treated as valid evidence by the evidence checker.
+EOF
+cat > "$GS_OK_ART/dod.md" <<'EOF'
+# Definition of Done
+- [x] Tests pass
+EOF
+APPROVAL_HASH3=$(sha256sum "$GS_OK_ART/approval.md" | awk '{print $1}')
+VAL_HASH3=$(sha256sum "$GS_OK_ART/validation_ledger.md" | awk '{print $1}')
+DOD_HASH3=$(sha256sum "$GS_OK_ART/dod.md" | awk '{print $1}')
+DIFF_HASH3=$(python3 - <<PY
+import hashlib, subprocess
+cwd = "$GS_OK_REPO"
+u = subprocess.run(["git", "diff", "--binary", "--full-index"], capture_output=True, cwd=cwd).stdout
+s = subprocess.run(["git", "diff", "--cached", "--binary", "--full-index"], capture_output=True, cwd=cwd).stdout
+print(hashlib.sha256(u + b"\0PRFORGE-STAGED\0" + s).hexdigest())
+PY
+)
+cat > "$GS_OK_ART/state.json" <<JSON
+{
+  "version": "1.0", "phase": "APPROVAL",
+  "release": {"approval_status": "READY_TO_SHIP"},
+  "approval": {
+    "approval_id": "ok-test",
+    "approved": true,
+    "approved_actions": ["push"],
+    "diff_hash": "$DIFF_HASH3",
+    "validation_hash": "$VAL_HASH3",
+    "approval_md_hash": "$APPROVAL_HASH3"
+  },
+  "dod": {"generation_hash": "$DOD_HASH3"}
+}
+JSON
+python3 "$ROOT/scripts/pr_approve.py" --repo "$GS_OK_REPO" --artifact-dir "$GS_OK_ART" \
+  "git push origin feature/clean" >/dev/null
+pass "pr_approve.py allows push with git_state=OK_TO_PUSH and clean approval"
+
+# Test 6: approval.md that summarizes both gate results is accepted
+if grep -qiE 'git.state|recommended_state|OK_TO_PUSH' "$GS_OK_ART/approval.md" && \
+   grep -qiE 'quality.weakness|worst_severity|none' "$GS_OK_ART/approval.md"; then
+  pass "approval.md includes git state and quality weakness gate summaries"
+else
+  fail "approval.md missing required gate summaries (git_state, quality_weakness)"
+fi
