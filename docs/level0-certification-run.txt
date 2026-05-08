@@ -1,6 +1,6 @@
 
 ======================================================================
-PRForge Level 0 Certification — 2026-05-08T18:54:42Z
+PRForge Level 0 Certification — 2026-05-08T19:23:23Z
 ======================================================================
 Root: /home/bamn/prforge
 
@@ -42,7 +42,8 @@ Python unit tests
 ======================================================================
   PASS  quality_weakness_gate tests (10)
   PASS  git_state_check tests (8)
-  SKIP  memory ledger tests (not found)
+  PASS  memory indexing regression tests
+  PASS  memory pipeline tests (generator→indexer→FTS)
   SKIP  candidate discovery tests (not found)
 
 ======================================================================
@@ -70,15 +71,15 @@ Level 1 — simulation status
   INFO  simulate_full_run.sh exists — attempting Level 1 run...
 
 ======================================================================
-PRForge Level 1 Simulation — 2026-05-08T18:55:11Z
+PRForge Level 1 Simulation — 2026-05-08T19:23:55Z
 ======================================================================
 
 ======================================================================
 Phase 0 — Setup: target repo and artifact directory
 ======================================================================
-Target repo: /tmp/prforge-level1.4Ip1M2/target-repo
+Target repo: /tmp/prforge-level1.hFsAxV/target-repo
 Feature branch: fix/validate-age-raise-value-error
-Artifact dir: /tmp/prforge-level1.4Ip1M2/artifacts
+Artifact dir: /tmp/prforge-level1.hFsAxV/artifacts
   PASS  pre-condition: buggy code causes test failures (defect confirmed)
 
 ======================================================================
@@ -105,7 +106,7 @@ Phase 3 — PLAN
 Phase 4 — IMPLEMENT
 ======================================================================
   PASS  state.json (IMPLEMENT) validates against schema
-  PASS  fix applied and committed (sha=61904f3)
+  PASS  fix applied and committed (sha=f91ad48)
   PASS  plan compliance: only planned file touched (buggy_validator.py)
 
 ======================================================================
@@ -147,7 +148,9 @@ Phase 10 — MEMORY_INDEX
 ======================================================================
   PASS  state.json (MEMORY_INDEX) validates against schema
   PASS  memory ledger initialized
-  PASS  postmortem saved to memory ledger
+  PASS  memory_indexer.py index: exit 0
+  PASS  memory_indexer.py: 6 record(s) indexed into memory.db
+  PASS  FTS recall: query 'ValueError' returned indexed lessons
   PASS  memory.db exists
 
 ======================================================================
@@ -158,7 +161,7 @@ Phase 11 — COMPLETE
 ======================================================================
 Phase 12 — Artifact trail verification (verify_level2_run.py)
 ======================================================================
-Level 2 artifact verification: /tmp/prforge-level1.4Ip1M2/artifacts
+Level 2 artifact verification: /tmp/prforge-level1.hFsAxV/artifacts
 
   PASS  artifact present: state.json
   PASS  artifact present: contract.md
@@ -189,29 +192,29 @@ Level 2 artifact verification: /tmp/prforge-level1.4Ip1M2/artifacts
 ======================================================================
 SUMMARY
 ======================================================================
-  Passed: 32 / 32
-  Failed: 0 / 32
+  Passed: 34 / 34
+  Failed: 0 / 34
 
-  Artifact directory: /tmp/prforge-level1.4Ip1M2/artifacts
-  Commit SHA: 61904f3
-  Run ID: level1-20260508-185511
+  Artifact directory: /tmp/prforge-level1.hFsAxV/artifacts
+  Commit SHA: f91ad48
+  Run ID: level1-20260508-192355
 
   LEVEL 1: CERTIFIED
 
-Run: 2026-05-08T18:55:14Z
+Run: 2026-05-08T19:23:59Z
 Branch: fix/prforge-v1_5-stabilization
-HEAD: 3a8ad28
+HEAD: d355c41
 
 ======================================================================
-PRForge Level 1 Simulation — 2026-05-08T18:55:11Z
+PRForge Level 1 Simulation — 2026-05-08T19:23:55Z
 ======================================================================
 
 ======================================================================
 Phase 0 — Setup: target repo and artifact directory
 ======================================================================
-Target repo: /tmp/prforge-level1.4Ip1M2/target-repo
+Target repo: /tmp/prforge-level1.hFsAxV/target-repo
 Feature branch: fix/validate-age-raise-value-error
-Artifact dir: /tmp/prforge-level1.4Ip1M2/artifacts
+Artifact dir: /tmp/prforge-level1.hFsAxV/artifacts
   PASS  pre-condition: buggy code causes test failures (defect confirmed)
 
 ======================================================================
@@ -238,7 +241,7 @@ Phase 3 — PLAN
 Phase 4 — IMPLEMENT
 ======================================================================
   PASS  state.json (IMPLEMENT) validates against schema
-  PASS  fix applied and committed (sha=61904f3)
+  PASS  fix applied and committed (sha=f91ad48)
   PASS  plan compliance: only planned file touched (buggy_validator.py)
 
 ======================================================================
@@ -280,7 +283,9 @@ Phase 10 — MEMORY_INDEX
 ======================================================================
   PASS  state.json (MEMORY_INDEX) validates against schema
   PASS  memory ledger initialized
-  PASS  postmortem saved to memory ledger
+  PASS  memory_indexer.py index: exit 0
+  PASS  memory_indexer.py: 6 record(s) indexed into memory.db
+  PASS  FTS recall: query 'ValueError' returned indexed lessons
   PASS  memory.db exists
 
 ======================================================================
@@ -291,7 +296,7 @@ Phase 11 — COMPLETE
 ======================================================================
 Phase 12 — Artifact trail verification (verify_level2_run.py)
 ======================================================================
-Level 2 artifact verification: /tmp/prforge-level1.4Ip1M2/artifacts
+Level 2 artifact verification: /tmp/prforge-level1.hFsAxV/artifacts
 
   PASS  artifact present: state.json
   PASS  artifact present: contract.md
@@ -322,28 +327,28 @@ Level 2 artifact verification: /tmp/prforge-level1.4Ip1M2/artifacts
 ======================================================================
 SUMMARY
 ======================================================================
-  Passed: 32 / 32
-  Failed: 0 / 32
+  Passed: 34 / 34
+  Failed: 0 / 34
 
-  Artifact directory: /tmp/prforge-level1.4Ip1M2/artifacts
-  Commit SHA: 61904f3
-  Run ID: level1-20260508-185511
+  Artifact directory: /tmp/prforge-level1.hFsAxV/artifacts
+  Commit SHA: f91ad48
+  Run ID: level1-20260508-192355
 
   LEVEL 1: CERTIFIED
 
-Run: 2026-05-08T18:55:14Z
+Run: 2026-05-08T19:23:59Z
 Branch: fix/prforge-v1_5-stabilization
-HEAD: 3a8ad28
+HEAD: d355c41
   PASS  Level 1 simulation — PASS
 
 ======================================================================
 SUMMARY
 ======================================================================
-  Passed: 30 / 30
-  Failed: 0 / 30
+  Passed: 32 / 32
+  Failed: 0 / 32
 
   LEVEL 0: CERTIFIED
 
-Run: 2026-05-08T18:55:14Z
+Run: 2026-05-08T19:23:59Z
 Branch: fix/prforge-v1_5-stabilization
-HEAD: 3a8ad28
+HEAD: d355c41
