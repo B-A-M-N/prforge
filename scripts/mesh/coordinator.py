@@ -22,6 +22,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import cast
 
 # Ensure sibling modules (redis_backend, notifications) are importable
 # when launched from systemd with WorkingDirectory set to scripts/mesh/
@@ -63,6 +64,28 @@ from notifications import notify
 from mesh_signing import sign_artifact, get_signing_key
 
 logger = logging.getLogger("prforge.coordinator")
+
+
+# ---------------------------------------------------------------------------
+# Redis sync-client helpers
+# redis stubs annotate hgetall/scan as Union[Awaitable[X], X] because the
+# same CommandsMixin is shared between sync and async clients. When using
+# the sync redis.Redis client (decode_responses=True) these always return
+# the concrete value, never an Awaitable. Wrap them once here so call sites
+# get a proper type and Pyright stops flagging every usage.
+# ---------------------------------------------------------------------------
+
+def _hgetall(r: redis.Redis, key: str) -> dict:
+    return cast(dict, r.hgetall(key))  # type: ignore[arg-type]
+
+
+def _scan(r: redis.Redis, cursor: int, **kwargs) -> tuple[int, list]:
+    return cast(tuple, r.scan(cursor, **kwargs))  # type: ignore[arg-type]
+
+
+def _get(r: redis.Redis, key: str) -> str | None:
+    return cast("str | None", r.get(key))  # type: ignore[arg-type]
+
 
 # Hard limits — enforced in code, not just config
 GLOBAL_MAX_ACTIVE_WORKER_JOBS = 2
@@ -472,9 +495,9 @@ def _process_plan_ready_jobs(
 
     cursor = 0
     while True:
-        cursor, keys = r.scan(cursor, match=f"Workflow:{cluster}:job:*", count=100)
+        cursor, keys = _scan(r, cursor, match=f"Workflow:{cluster}:job:*", count=100)
         for jk in keys:
-            job_data = r.hgetall(jk)
+            job_data = _hgetall(r, jk)
             if not job_data:
                 continue
 
@@ -625,9 +648,9 @@ def _reap_stale_workers(
     # Scan all job keys in Redis
     cursor = 0
     while True:
-        cursor, keys = r.scan(cursor, match=f"Workflow:{cluster}:job:*", count=100)
+        cursor, keys = _scan(r, cursor, match=f"Workflow:{cluster}:job:*", count=100)
         for jk in keys:
-            job_data = r.hgetall(jk)
+            job_data = _hgetall(r, jk)
             if not job_data:
                 continue
 
@@ -641,7 +664,7 @@ def _reap_stale_workers(
                 continue
 
             # Check if the assigned worker node is alive
-            node_data = r.hgetall(f"Workflow:{cluster}:node:{assigned_node}")
+            node_data = _hgetall(r, f"Workflow:{cluster}:node:{assigned_node}")
             node_missing = not node_data
             node_offline = node_data and node_data.get("status") == "offline"
 
@@ -732,9 +755,9 @@ def _process_submission_ready_jobs(
     """
     cursor = 0
     while True:
-        cursor, keys = r.scan(cursor, match=f"Workflow:{cluster}:job:*", count=100)
+        cursor, keys = _scan(r, cursor, match=f"Workflow:{cluster}:job:*", count=100)
         for jk in keys:
-            job_data = r.hgetall(jk)
+            job_data = _hgetall(r, jk)
             if job_data.get("status") != "approval_ready":
                 continue
 
@@ -883,9 +906,9 @@ def _poll_auditor_verdict_files(
 
     cursor = 0
     while True:
-        cursor, keys = r.scan(cursor, match=f"Workflow:{cluster}:job:*", count=100)
+        cursor, keys = _scan(r, cursor, match=f"Workflow:{cluster}:job:*", count=100)
         for jk in keys:
-            job_data = r.hgetall(jk)
+            job_data = _hgetall(r, jk)
             if job_data.get("status") != "approval_ready":
                 continue
             job_id    = job_data.get("job_id", "")
@@ -950,9 +973,9 @@ def _process_audit_results(
     """
     cursor = 0
     while True:
-        cursor, keys = r.scan(cursor, match=f"Workflow:{cluster}:job:*", count=100)
+        cursor, keys = _scan(r, cursor, match=f"Workflow:{cluster}:job:*", count=100)
         for jk in keys:
-            job_data = r.hgetall(jk)
+            job_data = _hgetall(r, jk)
             job_status = job_data.get("status", "")
             if job_status not in ("approval_ready",):
                 continue
@@ -976,8 +999,8 @@ def _process_audit_results(
 
             # Load verdicts
             try:
-                coord_verdict = json.loads(r.get(coord_marker) or "{}")
-                audit_verdict = json.loads(r.get(audit_marker) or "{}")
+                coord_verdict = json.loads(_get(r, coord_marker) or "{}")
+                audit_verdict = json.loads(_get(r, audit_marker) or "{}")
             except (json.JSONDecodeError, TypeError):
                 logger.warning("Failed to parse verdicts for %s", job_id)
                 continue
@@ -1404,7 +1427,7 @@ def handle_submission_ready(
         all_pass = False
 
     # 3. Worker role
-    node_data = r.hgetall(f"Workflow:{cluster}:node:{node_id}")
+    node_data = _hgetall(r, f"Workflow:{cluster}:node:{node_id}")
     node_roles_raw = node_data.get("roles", "") if node_data else ""
     try:
         node_roles = normalize_roles(node_roles_raw)
