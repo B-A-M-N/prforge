@@ -219,16 +219,18 @@ def _tick(
 
     # 3. Newly assigned job — write inbox
     if status == "assigned":
-        repo_path = _resolve_repo(job["repo"], repo_roots)
+        job_type = job.get("type", "")
+
+        # Create an isolated worktree so this worker's git state never bleeds into
+        # another worker's checkout on the same machine.
+        repo_path = _ensure_worktree(job, node_id)
         if repo_path is None:
-            logger.error("Cannot find repo %s in roots %s", job["repo"], repo_roots)
+            logger.error("Worktree creation failed for job=%s repo=%s", active_job_id, job["repo"])
             upsert_job(r, cluster, {**job, "status": "blocked"})
             notify(r, cluster, "WorkerBlocked",
-                   f"Repo {job['repo']} not found on {node_id}",
+                   f"Worktree creation failed for {job['repo']} on {node_id}",
                    desktop=desktop, pubsub=pubsub)
             return
-
-        job_type = job.get("type", "")
 
         # Handle same_file_review_assist jobs
         if job_type == "same_file_review_assist":
@@ -285,7 +287,9 @@ def _tick(
                    f"Job {active_job_id} blocked because leases expired or changed owner",
                    desktop=desktop, pubsub=pubsub)
             return
-        repo_path = _resolve_repo(job["repo"], repo_roots)
+        # Prefer the isolated worktree; fall back to shared checkout for
+        # pre-worktree jobs or non-distributed mode.
+        repo_path = _lookup_worktree(active_job_id) or _resolve_repo(job["repo"], repo_roots)
         if repo_path:
             _read_outbox_status(r, cluster, active_job_id, job, repo_path,
                                 node_id, node_state, desktop, pubsub)
@@ -520,6 +524,7 @@ def _write_advisory_inbox(
             "owner_worker_id": job.get("owner_worker_id", ""),
             "locked_paths": _json.loads(job.get("locked_paths", "[]")),
             "owner_artifact_dir": job.get("owner_artifact_dir", ""),
+            "owner_worktree": job.get("owner_worktree", ""),
             # Peer review fields (set when this is a post-completion peer review,
             # not a conflict-advisory job)
             "peer_review": job.get("peer_review") == "true",
@@ -654,6 +659,7 @@ def _finalize(
     if path_keys:
         release_path_locks(r, path_keys, node_id, job["job_id"])
     _clear_job(r, cluster, node_id, node_state)
+    _cleanup_worktree(job)
     if job.get("status") == "approval_ready":
         notify(r, cluster, "ApprovalReady",
                f"Job {job['job_id']} ready for /pr-approve",
@@ -668,6 +674,76 @@ def _clear_job(r: redis.Redis, cluster: str, node_id: str, node_state: dict) -> 
     })
     node_state["status"]     = "idle"
     node_state["active_job"] = ""
+
+
+def _ensure_worktree(job: dict, node_id: str) -> Optional[str]:
+    """Create an isolated git worktree for this job via checkout_broker.
+
+    Every job gets its own path under ~/.prforge/worktrees/<repo>/<job_id>/.
+    This prevents git branch switches in one worker from clobbering another
+    worker's working tree when both run on the same machine.
+
+    Returns the worktree path string, or None on failure.
+    """
+    import checkout_broker as cb
+
+    repo     = job["repo"]
+    job_id   = job["job_id"]
+    pr_num   = int(job.get("pr_number", 0))
+    job_type = job.get("type", "job")
+    slug     = f"{job_type}-pr{pr_num}" if pr_num else job_type
+    base_ref = job.get("base_branch", "main")
+    repo_url = f"https://github.com/{repo}.git"
+
+    try:
+        meta = cb.create_checkout(
+            repo_url=repo_url,
+            repo_key=repo,
+            job_id=job_id,
+            worker_id=node_id,
+            base_ref=base_ref,
+            target_number=pr_num,
+            task_slug=slug,
+        )
+        return meta["worktree"]
+    except Exception as exc:
+        logger.error("Worktree creation failed job=%s repo=%s: %s", job_id, repo, exc)
+        return None
+
+
+def _lookup_worktree(job_id: str) -> Optional[str]:
+    """Return the active worktree path for a job from checkout metadata."""
+    meta_path = Path.home() / ".prforge-mesh" / "checkouts" / f"{job_id}.json"
+    if not meta_path.exists():
+        return None
+    try:
+        meta = json.loads(meta_path.read_text())
+        if meta.get("state") == "active":
+            return meta.get("worktree") or None
+    except (json.JSONDecodeError, OSError):
+        pass
+    return None
+
+
+def _cleanup_worktree(job: dict) -> None:
+    """Cleanup or quarantine the job's worktree depending on outcome."""
+    import checkout_broker as cb
+
+    job_id = job["job_id"]
+    status = job.get("status", "")
+
+    meta_path = Path.home() / ".prforge-mesh" / "checkouts" / f"{job_id}.json"
+    if not meta_path.exists():
+        return  # worktree was never created (e.g. pre-worktree job or advisory)
+
+    try:
+        if status in ("complete", "approval_ready"):
+            cb.cleanup_checkout(job_id)
+        else:
+            # failed / blocked — quarantine for post-mortem
+            cb.quarantine_checkout(job_id)
+    except Exception as exc:
+        logger.warning("Worktree cleanup failed job=%s status=%s: %s", job_id, status, exc)
 
 
 def _resolve_repo(repo_slug: str, repo_roots: list) -> Optional[str]:

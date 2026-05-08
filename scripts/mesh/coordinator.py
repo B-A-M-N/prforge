@@ -842,9 +842,17 @@ def _enqueue_peer_review_job(
     pr_number       = str(primary_job.get("pr_number", ""))
     primary_worker  = primary_job.get("assigned_node", "")
 
-    # Resolve primary artifact dir from .prforge-run pointer
+    # Resolve primary artifact dir and worktree from checkout metadata
     primary_artifact_dir = ""
-    if config is not None:
+    primary_worktree     = ""
+    checkout_meta_path   = Path.home() / ".prforge-mesh" / "checkouts" / f"{primary_job_id}.json"
+    if checkout_meta_path.exists():
+        try:
+            checkout_meta    = json.loads(checkout_meta_path.read_text())
+            primary_worktree = checkout_meta.get("worktree", "")
+        except (json.JSONDecodeError, OSError):
+            pass
+    if not primary_artifact_dir and config is not None:
         repo_roots = config.get("worker", {}).get("repo_roots", [])
         repo_path  = _resolve_repo_path(repo, repo_roots)
         if repo_path:
@@ -860,6 +868,7 @@ def _enqueue_peer_review_job(
         "owner_job_id":       primary_job_id,
         "owner_worker_id":    primary_worker,
         "owner_artifact_dir": primary_artifact_dir,
+        "owner_worktree":     primary_worktree,
         "repo":               repo,
         "pr_number":          pr_number,
         "head_branch":        primary_job.get("head_branch", ""),
