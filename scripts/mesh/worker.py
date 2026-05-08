@@ -520,12 +520,21 @@ def _write_advisory_inbox(
             "owner_worker_id": job.get("owner_worker_id", ""),
             "locked_paths": _json.loads(job.get("locked_paths", "[]")),
             "owner_artifact_dir": job.get("owner_artifact_dir", ""),
-            "mode": "read_only",
+            # Peer review fields (set when this is a post-completion peer review,
+            # not a conflict-advisory job)
+            "peer_review": job.get("peer_review") == "true",
+            "primary_job_id": job.get("primary_job_id", ""),
+            "mode": "peer_review" if job.get("peer_review") == "true" else "read_only",
         },
         "constraints": {
             "read_only": True,
             "may_not_edit_locked_paths": True,
             "advisory_artifacts_only": True,
+            # When peer_review=true, the worker Claude session should write a
+            # peer_verdict into outbox/status.json when done:
+            # {"status": "complete", "peer_verdict": {"decision": "peer_pass"|"peer_flag",
+            #   "summary": "...", "issues": [...]}}
+            "peer_review_verdict_required": job.get("peer_review") == "true",
         },
     }
 
@@ -593,6 +602,34 @@ def _read_outbox_status(
                desktop=desktop, pubsub=pubsub)
 
     elif status in ("complete", "failed", "blocked"):
+        # For peer review jobs: promote the verdict to Redis so the coordinator
+        # can pick it up and proceed to write the final coordinator_verdict.
+        if (status == "complete"
+                and job.get("type") == "same_file_review_assist"
+                and job.get("peer_review") == "true"):
+            primary_job_id = job.get("primary_job_id", "")
+            peer_verdict   = status_data.get("peer_verdict")
+            if primary_job_id and peer_verdict:
+                r.setex(
+                    f"Workflow:{cluster}:peer_review_verdict:{primary_job_id}",
+                    7200,
+                    json.dumps({
+                        **peer_verdict,
+                        "reviewer_node": node_id,
+                        "review_job_id": job_id,
+                        "completed_at":  datetime.now(timezone.utc).isoformat(),
+                    }),
+                )
+                logger.info(
+                    "Promoted peer review verdict to Redis: primary=%s reviewer=%s decision=%s",
+                    primary_job_id, node_id, peer_verdict.get("decision"),
+                )
+                emit_event(r, cluster, "PeerReviewComplete", {
+                    "review_job_id":  job_id,
+                    "primary_job_id": primary_job_id,
+                    "reviewer_node":  node_id,
+                    "decision":       peer_verdict.get("decision", "unknown"),
+                })
         upsert_job(r, cluster, {**job, "status": status})
 
 
@@ -625,8 +662,9 @@ def _finalize(
 
 def _clear_job(r: redis.Redis, cluster: str, node_id: str, node_state: dict) -> None:
     r.hset(f"Workflow:{cluster}:node:{node_id}", mapping={
-        "status":     "idle",
-        "active_job": "",
+        "status":          "idle",
+        "active_job":      "",
+        "active_job_type": "",
     })
     node_state["status"]     = "idle"
     node_state["active_job"] = ""

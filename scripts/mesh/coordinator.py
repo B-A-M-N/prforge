@@ -122,9 +122,13 @@ def _tick(r: redis.Redis, cluster: str, lease_ttl: int, config: dict | None = No
         if _node_is_worker(n)
     ]
 
-    # 2. Count active worker jobs (global cap — coordinator,auditor count excluded)
+    # 2. Count active PRIMARY worker jobs (global cap).
+    # same_file_review_assist (peer review) does not count — it runs on an idle/finishing
+    # worker and should not block new primary PR dispatch.
     active_worker_jobs = sum(
-        1 for n in workers if n.get("status") == "active"
+        1 for n in workers
+        if n.get("status") == "active"
+        and n.get("active_job_type", "") not in READONLY_JOB_TYPES
     )
     if active_worker_jobs >= GLOBAL_MAX_ACTIVE_WORKER_JOBS:
         logger.debug("Global cap reached: %d/%d active worker jobs",
@@ -197,6 +201,10 @@ def _tick(r: redis.Redis, cluster: str, lease_ttl: int, config: dict | None = No
                 continue
             allowed = _parse_allowed_modes(worker)
             if not _mode_allowed(job_type, allowed):
+                continue
+            # Peer review: reviewer must be a different worker than the primary
+            reviewer_exclude = job.get("reviewer_exclude", "")
+            if reviewer_exclude and wid == reviewer_exclude:
                 continue
             target_worker = worker
             break
@@ -277,10 +285,11 @@ def _tick(r: redis.Redis, cluster: str, lease_ttl: int, config: dict | None = No
         if "_stream_id" in job:
             remove_from_pending(r, cluster, job["_stream_id"])
 
-        # 11. Update worker node state
+        # 11. Update worker node state (active_job_type used by cap counting)
         r.hset(f"Workflow:{cluster}:node:{wid}", mapping={
-            "status":     "active",
-            "active_job": job_id,
+            "status":          "active",
+            "active_job":      job_id,
+            "active_job_type": job_type,
         })
 
         emit_event(r, cluster, "JobDispatched", {
@@ -293,7 +302,9 @@ def _tick(r: redis.Redis, cluster: str, lease_ttl: int, config: dict | None = No
         notify(r, cluster, "JobDispatched",
                f"Job {job_id} → {wid} for {repo}#{pr}")
 
-        active_worker_jobs += 1
+        # Only primary jobs count against the cap; review jobs don't
+        if job_type not in READONLY_JOB_TYPES:
+            active_worker_jobs += 1
         assigned_prs.add(pr_sig)
         assigned_branches.add(br_sig)
         assigned_workers.add(wid)
@@ -708,52 +719,153 @@ def _process_submission_ready_jobs(
     config: dict,
 ) -> None:
     """
-    Find jobs with status=approval_ready that don't yet have a coordinator_verdict.
-    For each, call handle_submission_ready() to verify and write verdict.
+    Find primary jobs with status=approval_ready that need a coordinator verdict.
+
+    Pipeline (per job):
+      1. If no peer review job enqueued yet → enqueue one and wait.
+      2. If peer review job enqueued but verdict not in Redis → keep waiting.
+      3. If peer review verdict present → call handle_submission_ready (which
+         includes the peer verdict in its checks) and write coordinator_verdict.
+
+    same_file_review_assist jobs (review/advisory) are skipped here — they have
+    their own completion path and never trigger another peer review chain.
     """
-    # Scan all jobs in Redis for approval_ready status
-    # Use a pattern scan for job keys
     cursor = 0
     while True:
         cursor, keys = r.scan(cursor, match=f"Workflow:{cluster}:job:*", count=100)
         for jk in keys:
             job_data = r.hgetall(jk)
-            if job_data.get("status") == "approval_ready":
-                job_id = job_data.get("job_id", "")
-                if not job_id:
-                    continue
-                # Check if verdict already exists (avoid re-processing)
-                repo = job_data.get("repo", "")
-                pr_number = str(job_data.get("pr_number", ""))
-                if not repo or not pr_number:
-                    continue
-                # Check if coordinator_verdict already written
-                verdict_marker = f"Workflow:{cluster}:coordinator_verdict:{repo.replace('/', '_')}:{pr_number}"
-                if r.exists(verdict_marker):
-                    continue
-                # Build job dict from hash
-                job = {k: v for k, v in job_data.items()}
-                try:
-                    verdict = handle_submission_ready(r, cluster, job, config)
-                    # Write verdict marker to prevent re-processing
-                    r.set(verdict_marker, json.dumps(verdict), ex=3600)
-                    # If coordinator passed, signal auditor Claude session via Redis
-                    if verdict.get("decision") == "coordinator_pass":
-                        audit_key = (
-                            f"Workflow:{cluster}:audit_pending:"
-                            f"{repo.replace('/', '_')}:{pr_number}"
-                        )
-                        r.setex(audit_key, 3600, json.dumps({
-                            "job_id":     job_id,
-                            "repo":       repo,
-                            "pr_number":  pr_number,
-                            "timestamp":  datetime.now(timezone.utc).isoformat(),
-                        }))
-                        logger.info("Set audit_pending for job=%s", job_id)
-                except Exception as e:
-                    logger.exception("handle_submission_ready failed for %s: %s", job_id, e)
+            if job_data.get("status") != "approval_ready":
+                continue
+
+            job_id   = job_data.get("job_id", "")
+            job_type = job_data.get("type", "")
+            if not job_id:
+                continue
+
+            # Review/advisory jobs don't chain into another peer review
+            if job_type in READONLY_JOB_TYPES:
+                continue
+
+            repo      = job_data.get("repo", "")
+            pr_number = str(job_data.get("pr_number", ""))
+            if not repo or not pr_number:
+                continue
+
+            verdict_marker = (
+                f"Workflow:{cluster}:coordinator_verdict:"
+                f"{repo.replace('/', '_')}:{pr_number}"
+            )
+            if r.exists(verdict_marker):
+                continue  # already done
+
+            peer_review_job_key = f"Workflow:{cluster}:peer_review_job:{job_id}"
+            peer_verdict_key    = f"Workflow:{cluster}:peer_review_verdict:{job_id}"
+
+            # Stage 1: enqueue peer review if not yet done
+            if not r.exists(peer_review_job_key):
+                _enqueue_peer_review_job(r, cluster, job_data, config)
+                continue  # wait for reviewer
+
+            # Stage 2: wait for reviewer verdict
+            peer_verdict_raw = r.get(peer_verdict_key)
+            if not peer_verdict_raw:
+                continue  # still reviewing
+
+            # Stage 3: both primary work and peer review are done → coordinator verdict
+            job = {k: v for k, v in job_data.items()}
+            job["peer_verdict"] = peer_verdict_raw  # passed into handle_submission_ready
+            try:
+                verdict = handle_submission_ready(r, cluster, job, config)
+                r.set(verdict_marker, json.dumps(verdict), ex=3600)
+                if verdict.get("decision") == "coordinator_pass":
+                    audit_key = (
+                        f"Workflow:{cluster}:audit_pending:"
+                        f"{repo.replace('/', '_')}:{pr_number}"
+                    )
+                    r.setex(audit_key, 3600, json.dumps({
+                        "job_id":    job_id,
+                        "repo":      repo,
+                        "pr_number": pr_number,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    }))
+                    logger.info("Set audit_pending for job=%s (peer review passed)", job_id)
+            except Exception as e:
+                logger.exception("handle_submission_ready failed for %s: %s", job_id, e)
         if cursor == 0:
             break
+
+
+def _enqueue_peer_review_job(
+    r: redis.Redis,
+    cluster: str,
+    primary_job: dict,
+    config: dict | None,
+) -> None:
+    """
+    Enqueue a same_file_review_assist job so a second worker can peer-review
+    the completed primary job before the coordinator writes its verdict.
+
+    The peer review job carries:
+      - peer_review=true   (distinguishes it from conflict-advisory review)
+      - primary_job_id     (which job is being reviewed)
+      - reviewer_exclude   (primary worker's node — cannot review own work)
+      - owner_artifact_dir (where the primary job's artifacts live)
+    """
+    import uuid as _uuid
+
+    primary_job_id  = primary_job["job_id"]
+    repo            = primary_job.get("repo", "")
+    pr_number       = str(primary_job.get("pr_number", ""))
+    primary_worker  = primary_job.get("assigned_node", "")
+
+    # Resolve primary artifact dir from .prforge-run pointer
+    primary_artifact_dir = ""
+    if config is not None:
+        repo_roots = config.get("worker", {}).get("repo_roots", [])
+        repo_path  = _resolve_repo_path(repo, repo_roots)
+        if repo_path:
+            primary_artifact_dir = str(_read_pointer_artifact_dir(repo_path))
+
+    review_job_id = f"peer_{primary_job_id[:16]}_{_uuid.uuid4().hex[:8]}"
+    review_job = {
+        "job_id":             review_job_id,
+        "type":               "same_file_review_assist",
+        "peer_review":        "true",
+        "primary_job_id":     primary_job_id,
+        "reviewer_exclude":   primary_worker,
+        "owner_job_id":       primary_job_id,
+        "owner_worker_id":    primary_worker,
+        "owner_artifact_dir": primary_artifact_dir,
+        "repo":               repo,
+        "pr_number":          pr_number,
+        "head_branch":        primary_job.get("head_branch", ""),
+        "base_branch":        primary_job.get("base_branch", "main"),
+        "source_url":         primary_job.get("source_url", ""),
+        "objective":          (
+            f"Peer review of {primary_job_id} — verify {repo}#{pr_number} "
+            "is fully fleshed out before coordinator verdict"
+        ),
+        "priority":           "P1",
+        "created_at":         datetime.now(timezone.utc).isoformat(),
+        "status":             "queued",
+    }
+
+    enqueue_job(r, cluster, review_job)
+
+    # Marker prevents double-enqueue across ticks
+    r.setex(f"Workflow:{cluster}:peer_review_job:{primary_job_id}", 7200, review_job_id)
+
+    logger.info(
+        "Enqueued peer review job=%s for primary=%s repo=%s pr=%s exclude_worker=%s",
+        review_job_id, primary_job_id, repo, pr_number, primary_worker,
+    )
+    emit_event(r, cluster, "PeerReviewEnqueued", {
+        "review_job_id":  review_job_id,
+        "primary_job_id": primary_job_id,
+        "repo":           repo,
+        "pr_number":      pr_number,
+    })
 
 
 def _poll_auditor_verdict_files(
@@ -1371,6 +1483,26 @@ def handle_submission_ready(
     checks["artifacts"] = {"pass": artifacts_ok, "reason": "; ".join(artifact_reasons)}
     if not artifacts_ok:
         all_pass = False
+
+    # 8. Peer review verdict (present when called after peer review pipeline completes)
+    peer_verdict_raw = job.get("peer_verdict", "")
+    if peer_verdict_raw:
+        try:
+            pv = json.loads(peer_verdict_raw) if isinstance(peer_verdict_raw, str) else peer_verdict_raw
+            peer_pass = pv.get("decision") == "peer_pass"
+            checks["peer_review"] = {
+                "pass":     peer_pass,
+                "reason":   "" if peer_pass else f"Peer reviewer flagged: {pv.get('summary', '')}",
+                "reviewer": pv.get("reviewer_node", ""),
+                "decision": pv.get("decision", "unknown"),
+            }
+            if not peer_pass:
+                all_pass = False
+        except (json.JSONDecodeError, TypeError) as exc:
+            checks["peer_review"] = {"pass": False, "reason": f"peer_verdict parse error: {exc}"}
+            all_pass = False
+    else:
+        checks["peer_review"] = {"pass": True, "reason": "no peer review (legacy / direct path)"}
 
     # Build verdict
     decision = "coordinator_pass" if all_pass else "coordinator_fail"
