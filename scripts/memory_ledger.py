@@ -220,6 +220,11 @@ def cmd_save_postmortem(args):
 
     conn = get_connection()
     with conn:
+        # Ensure parent run exists before inserting postmortem (FK constraint)
+        conn.execute(
+            "INSERT OR IGNORE INTO runs (run_id, repo, started_at, run_dir) VALUES (?, ?, ?, ?)",
+            (run_id, repo, now, ""),
+        )
         conn.execute(
             "INSERT OR REPLACE INTO postmortems (id, run_id, repo, pr_number, outcome, summary_json, evidence_json, tags_json, confidence, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (postmortem_id, run_id, repo, pr_number, outcome, summary_json, evidence_json, tags_json, confidence, now)
@@ -258,6 +263,15 @@ def cmd_add_memory_record(args):
 
     conn = get_connection()
     with conn:
+        # Ensure parent run and postmortem exist (FK chain: runs → postmortems → memory_records)
+        conn.execute(
+            "INSERT OR IGNORE INTO runs (run_id, repo, started_at, run_dir) VALUES (?, ?, ?, ?)",
+            (args.run_id, args.repo, now, ""),
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO postmortems (id, run_id, repo, pr_number, outcome, summary_json, evidence_json, tags_json, confidence, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (args.postmortem_id, args.run_id, args.repo, 0, "UNKNOWN", "{}", "[]", "[]", "0.0", now),
+        )
         conn.execute("""
             INSERT INTO memory_records (
                 id, postmortem_id, run_id, lesson, lesson_type,
