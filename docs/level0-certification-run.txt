@@ -1,0 +1,82 @@
+
+======================================================================
+PRForge Level 0 Certification — 2026-05-08T17:49:01Z
+======================================================================
+Root: /home/bamn/prforge
+
+
+======================================================================
+Shell syntax
+======================================================================
+  PASS  syntax: blast-radius.sh
+  PASS  syntax: commit-msg.sh
+  PASS  syntax: discipline-check.sh
+  PASS  syntax: gitnexus-intelligence.sh
+  PASS  syntax: memory-autocapture.sh
+  PASS  syntax: mesh-lock-guard.sh
+  PASS  syntax: phase-boundary.sh
+  PASS  syntax: phase-gate-enforcer.sh
+  PASS  syntax: phase-injector.sh
+  PASS  syntax: pre-commit.sh
+  PASS  syntax: preflight.sh
+  PASS  syntax: prforge-common.sh
+  PASS  syntax: distributed-coordinator-watch.sh
+  PASS  syntax: distributed-worker-watch.sh
+  PASS  syntax: local-watch.sh
+  PASS  syntax: certify.sh
+  PASS  syntax: prforge_footer.sh
+
+======================================================================
+Phase machine
+======================================================================
+  PASS  phase machine is consistent
+
+======================================================================
+Artifact pollution
+======================================================================
+  PASS  worktree clean (no uncommitted tracked changes)
+  PASS  no .prforge/ dirs inside repo tree
+
+======================================================================
+Python unit tests
+======================================================================
+  PASS  quality_weakness_gate tests (10)
+  PASS  git_state_check tests (8)
+  SKIP  memory ledger tests (not found)
+  SKIP  candidate discovery tests (not found)
+
+======================================================================
+Hook regression tests
+======================================================================
+  PASS  test_prforge_regressions.sh — 20 tests passed
+  PASS  test_preflight.sh — 8 tests passed
+
+======================================================================
+Gate wiring checks
+======================================================================
+  PASS  quality_weakness_gate.py referenced in phase-boundary.sh
+  PASS  git_state gate referenced in phase-boundary.sh
+  PASS  pr_approve.py checks quality_weakness
+  PASS  pr_approve.py checks git_state
+
+======================================================================
+Legacy reference audit
+======================================================================
+  PASS  no unexpected SHIPPED state references in hooks/commands/skills
+
+======================================================================
+Level 1 — simulation status
+======================================================================
+  SKIP  Level 1: simulate_full_run.sh not yet created (Issue #3 — not in current queue)
+
+======================================================================
+SUMMARY
+======================================================================
+  Passed: 29 / 29
+  Failed: 0 / 29
+
+  LEVEL 0: CERTIFIED
+
+Run: 2026-05-08T17:49:26Z
+Branch: fix/prforge-v1_5-stabilization
+HEAD: a5cac0b
