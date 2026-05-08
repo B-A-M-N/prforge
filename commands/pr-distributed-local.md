@@ -1,22 +1,22 @@
 ---
 name: pr-distributed-local
-description: "Configure and control PRForge Local Mesh — vertical scaling on ONE machine (watchtower + workers on same box)."
+description: "Configure and control PRForge Local Mesh — vertical scaling on ONE machine (coordinator + workers on same box)."
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep
 ---
 
 # /pr-distributed-local — PRForge Vertical Mesh (Single Machine)
 
 You are executing a PRForge Vertical Mesh command.
-This runs multiple Claude Code instances on the SAME machine:
-- One coordinator (managing + auditing)
-- One or more workers (editing agents)
+This runs actual daemon processes on the SAME machine:
+- One coordinator daemon (dispatches jobs to workers)
+- One or more worker daemons (pick up and run PRForge jobs)
 
-**Vertical scaling** = more workers on one box.
+**Vertical scaling** = more worker daemons on one box.
 **Horizontal scaling** = more machines on LAN → use `/pr-distributed`.
 
-Each worker gets an **isolated worktree** — never the original repo checkout.
+Each worker daemon gets a unique node ID. Never share config files between workers.
 
-Follow these instructions exactly. Use your Write and Bash tools to create real files on disk.
+Follow these instructions exactly. Use your Bash tool to create real files and start real processes.
 
 ## Parse the argument
 
@@ -27,7 +27,7 @@ The user typed `/pr-distributed-local <arg>`. The arg is one of:
 
 ## ACTION: `coordinator`
 
-Sets up THIS machine as the local mesh boss. Creates Redis, worktree roots, and config.
+Sets up THIS machine as the local mesh coordinator. Writes config, starts the coordinator daemon.
 
 ### Step 1: Check prerequisites
 
@@ -35,39 +35,35 @@ Sets up THIS machine as the local mesh boss. Creates Redis, worktree roots, and 
 python3 --version
 python3 -c "import redis; print(redis.__version__)" 2>/dev/null || echo "REDIS_MISSING"
 gh auth status 2>&1 | head -3
+MESH_SCRIPTS=$(python3 -c "from pathlib import Path; p = list(Path.home().rglob('prforge_mesh.py')); print(p[0].parent if p else 'NOT_FOUND')")
+echo "Mesh scripts: $MESH_SCRIPTS"
 ```
 
 If redis-py is missing: `pip install redis>=4.6.0`
 If `gh` auth fails: warn "gh auth login required for auditing"
+If `MESH_SCRIPTS` is `NOT_FOUND`: error — cannot start daemons without the scripts.
 
 ### Step 2: Create mesh directories
 
 ```bash
-mkdir -p ~/.prforge-mesh/checkouts
-mkdir -p ~/.prforge/repos
-mkdir -p ~/.prforge/worktrees
-mkdir -p ~/.prforge/quarantine
+mkdir -p ~/.prforge-mesh/checkouts ~/.prforge-mesh/logs
+mkdir -p ~/.prforge/repos ~/.prforge/worktrees ~/.prforge/quarantine
 ```
 
 ### Step 3: Start or validate local Redis
 
 ```bash
-# Check if Redis is already running on our port
 REDIS_PORT=6380
 if redis-cli -p $REDIS_PORT ping 2>/dev/null | grep -q PONG; then
   echo "✓ Redis already running on port $REDIS_PORT"
 else
-  # Try to start local Redis
   if command -v redis-server >/dev/null 2>&1; then
-    # Find available port
     for port in 6380 6381 6382 6383 6384 6385 6386 6387 6388 6389; do
       if ! redis-cli -p $port ping 2>/dev/null | grep -q PONG; then
         REDIS_PORT=$port
         break
       fi
     done
-
-    # Generate Redis config
     REDIS_DIR="$HOME/.prforge-mesh/redis"
     mkdir -p "$REDIS_DIR"
     cat > "$REDIS_DIR/redis-local.conf" <<REDIS_CONF
@@ -78,7 +74,6 @@ loglevel notice
 save ""
 appendonly no
 REDIS_CONF
-
     redis-server "$REDIS_DIR/redis-local.conf"
     sleep 1
     if redis-cli -p $REDIS_PORT ping 2>/dev/null | grep -q PONG; then
@@ -92,20 +87,31 @@ REDIS_CONF
     exit 1
   fi
 fi
+echo "REDIS_PORT=$REDIS_PORT"
 ```
 
-### Step 4: Write mesh config
+### Step 4: Write coordinator config
+
+Write the config in the schema that `prforge_mesh.py` expects (`mesh.cluster_name`, `mesh.node_id`, `mesh.redis_url`):
 
 ```bash
+REDIS_PORT=$(redis-cli -p 6380 ping 2>/dev/null | grep -q PONG && echo 6380 || redis-cli -p 6381 ping 2>/dev/null | grep -q PONG && echo 6381 || echo 6380)
+
 cat > ~/.prforge-mesh/config.json <<EOF
 {
-  "mode": "local",
-  "cluster": "local",
-  "roles": ["coordinator", "auditor"],
-  "redis": {
-    "host": "127.0.0.1",
-    "port": $REDIS_PORT,
-    "url": "redis://127.0.0.1:$REDIS_PORT/0"
+  "mesh": {
+    "cluster_name": "local",
+    "node_id": "coordinator-local",
+    "roles": ["coordinator", "auditor"],
+    "redis_url": "redis://127.0.0.1:$REDIS_PORT/0"
+  },
+  "limits": {
+    "lease_ttl_seconds": 1800,
+    "heartbeat_interval_seconds": 15
+  },
+  "notifications": {
+    "desktop": false,
+    "pubsub": true
   },
   "paths": {
     "repo_cache_root": "$HOME/.prforge/repos",
@@ -113,217 +119,218 @@ cat > ~/.prforge-mesh/config.json <<EOF
     "quarantine_root": "$HOME/.prforge/quarantine",
     "checkout_meta_root": "$HOME/.prforge-mesh/checkouts"
   },
-  "max_workers": 3,
-  "lock_ttl_seconds": 600
+  "max_workers": 3
 }
 EOF
-echo "✓ Mesh config written"
+echo "✓ Coordinator config written"
+cat ~/.prforge-mesh/config.json
 ```
 
-### Step 5: Register coordinator in Redis
+### Step 5: Start coordinator daemon
 
 ```bash
-python3 << 'PYEOF'
-import json, redis, time
-from pathlib import Path
+MESH_SCRIPTS=$(python3 -c "from pathlib import Path; p = list(Path.home().rglob('prforge_mesh.py')); print(p[0].parent if p else '')")
+LOG="$HOME/.prforge-mesh/logs/coordinator.log"
+PID_FILE="$HOME/.prforge-mesh/coordinator.pid"
 
-config = json.loads(Path.home().joinpath(".prforge-mesh/config.json").read_text())
-r = redis.Redis.from_url(config["redis"]["url"], decode_responses=True)
+# Kill any existing coordinator daemon
+if [ -f "$PID_FILE" ]; then
+  OLD_PID=$(cat "$PID_FILE")
+  kill "$OLD_PID" 2>/dev/null && echo "Stopped previous coordinator (PID $OLD_PID)"
+  rm -f "$PID_FILE"
+fi
 
-node_id = "coordinator-local"
-r.hset(f"Workflow:{config['cluster']}:node:{node_id}", mapping={
-    "node_id": node_id,
-    "roles": "coordinator,auditor",
-    "status": "online",
-    "capacity": str(config["max_workers"]),
-    "active_job": "",
-    "last_seen": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-})
-r.sadd(f"Workflow:{config['cluster']}:nodes", node_id)
-print(f"✓ Coordinator registered: {node_id}")
-PYEOF
+cd "$MESH_SCRIPTS"
+nohup python3 prforge_mesh.py coordinator > "$LOG" 2>&1 &
+DAEMON_PID=$!
+echo $DAEMON_PID > "$PID_FILE"
+sleep 2
+
+# Verify it's running
+if kill -0 "$DAEMON_PID" 2>/dev/null; then
+  echo "✓ Coordinator daemon started (PID $DAEMON_PID)"
+  echo "  Log: $LOG"
+  tail -5 "$LOG"
+else
+  echo "ERROR: Coordinator daemon failed to start"
+  cat "$LOG"
+  exit 1
+fi
 ```
 
-Print: "✓ coordinator online — managing + auditing"
-Print: "Max workers: 3"
-Print: "Redis: 127.0.0.1:$REDIS_PORT"
+Print: "✓ coordinator online — dispatching jobs"
+Print: "Redis: 127.0.0.1:<port>"
+Print: "Log: ~/.prforge-mesh/logs/coordinator.log"
 
 ---
 
 ## ACTION: `worker`
 
-Registers this Claude instance as a worker. It will:
-1. Register in Redis
-2. Wait for job assignment
-3. Create isolated worktree for each job
-4. Run PRForge workflow inside worktree
+Starts a worker daemon on this machine with a unique node ID. Each terminal running
+`/pr-distributed-local worker` gets its own daemon and its own config file — they must
+NOT share a config file or node ID.
 
-### Step 1: Read mesh config
+### Step 1: Find mesh scripts and read coordinator config
 
 ```bash
-CONFIG=$(cat ~/.prforge-mesh/config.json)
-REDIS_URL=$(echo "$CONFIG" | python3 -c "import json,sys; print(json.load(sys.stdin)['redis']['url'])")
-CLUSTER=$(echo "$CONFIG" | python3 -c "import json,sys; print(json.load(sys.stdin).get('cluster','local'))")
+MESH_SCRIPTS=$(python3 -c "from pathlib import Path; p = list(Path.home().rglob('prforge_mesh.py')); print(p[0].parent if p else 'NOT_FOUND')")
+echo "Mesh scripts: $MESH_SCRIPTS"
+
+if [ ! -f ~/.prforge-mesh/config.json ]; then
+  echo "ERROR: Coordinator config not found. Run /pr-distributed-local coordinator first."
+  exit 1
+fi
+
+REDIS_URL=$(python3 -c "import json; c=json.load(open('$HOME/.prforge-mesh/config.json')); print(c['mesh']['redis_url'])")
+CLUSTER=$(python3 -c "import json; c=json.load(open('$HOME/.prforge-mesh/config.json')); print(c['mesh']['cluster_name'])")
+echo "Redis: $REDIS_URL  Cluster: $CLUSTER"
 ```
 
-### Step 2: Generate worker ID and register
+### Step 2: Generate unique worker ID and write per-worker config
 
-Each worker on this machine needs a unique ID. Always generate a fresh one — never
-reuse a shared file, since multiple workers run on the same box simultaneously.
+Each worker needs its OWN config file with a unique node_id. Never reuse the coordinator
+config or another worker's config.
 
 ```bash
-# Always generate a unique ID for this worker session (PID-scoped)
 WORKER_ID=$(python3 -c "import uuid, socket; print('worker-' + socket.gethostname() + '-' + str(uuid.uuid4())[:8])")
-# Write to a PID-scoped file so parallel workers don't share it
-echo "$WORKER_ID" > ~/.prforge-mesh/worker-id-$$
+WORKER_CONFIG="$HOME/.prforge-mesh/worker-config-$WORKER_ID.json"
 
-python3 << PYEOF
-import json, redis, time
-from pathlib import Path
+REDIS_URL=$(python3 -c "import json; c=json.load(open('$HOME/.prforge-mesh/config.json')); print(c['mesh']['redis_url'])")
+CLUSTER=$(python3 -c "import json; c=json.load(open('$HOME/.prforge-mesh/config.json')); print(c['mesh']['cluster_name'])")
 
-config = json.loads(Path.home().joinpath(".prforge-mesh/config.json").read_text())
-r = redis.Redis.from_url(config["redis"]["url"], decode_responses=True)
+cat > "$WORKER_CONFIG" <<EOF
+{
+  "mesh": {
+    "cluster_name": "$CLUSTER",
+    "node_id": "$WORKER_ID",
+    "roles": ["worker"],
+    "redis_url": "$REDIS_URL"
+  },
+  "worker": {
+    "repo_roots": ["$HOME"],
+    "capacity": 1
+  },
+  "limits": {
+    "lease_ttl_seconds": 1800,
+    "heartbeat_interval_seconds": 15
+  },
+  "notifications": {
+    "desktop": false,
+    "pubsub": true
+  }
+}
+EOF
 
-node_id = "$WORKER_ID"
-r.hset(f"Workflow:{config['cluster']}:node:{node_id}", mapping={
-    "node_id": node_id,
-    "roles": "worker",
-    "status": "idle",
-    "capacity": "1",
-    "active_job": "",
-    "last_seen": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-    "repo_roots": str(Path.home()),
-})
-r.sadd(f"Workflow:{config['cluster']}:nodes", node_id)
-print(f"✓ Worker registered: {node_id}")
-PYEOF
+echo "✓ Worker config written: $WORKER_CONFIG"
+echo "  node_id: $WORKER_ID"
 ```
 
-### Step 3: Confirm worker ID for this session
-
-The worker ID lives in the env var `WORKER_ID` set above. Do NOT write it into
-`config.json` — that file is shared by all workers on this machine, and one worker
-would overwrite another's ID.
+### Step 3: Start worker daemon
 
 ```bash
-echo "✓ Worker ID for this session: $WORKER_ID"
-echo "  (stored in ~/.prforge-mesh/worker-id-$$ for hook reference)"
+MESH_SCRIPTS=$(python3 -c "from pathlib import Path; p = list(Path.home().rglob('prforge_mesh.py')); print(p[0].parent if p else '')")
+LOG="$HOME/.prforge-mesh/logs/worker-$WORKER_ID.log"
+PID_FILE="$HOME/.prforge-mesh/worker-$WORKER_ID.pid"
+
+mkdir -p "$HOME/.prforge-mesh/logs"
+cd "$MESH_SCRIPTS"
+nohup python3 prforge_mesh.py --config "$WORKER_CONFIG" worker > "$LOG" 2>&1 &
+DAEMON_PID=$!
+echo $DAEMON_PID > "$PID_FILE"
+sleep 2
+
+if kill -0 "$DAEMON_PID" 2>/dev/null; then
+  echo "✓ Worker daemon started: $WORKER_ID (PID $DAEMON_PID)"
+  echo "  Config: $WORKER_CONFIG"
+  echo "  Log: $LOG"
+  tail -5 "$LOG"
+else
+  echo "ERROR: Worker daemon failed to start"
+  cat "$LOG"
+  exit 1
+fi
 ```
 
-### Step 4: Export mesh env vars for the hook
-
-The mesh lock guard hook needs these to enforce worktree/path boundaries:
-
-```bash
-export PRFORGE_MESH_ACTIVE=1
-export PRFORGE_MESH_MODE=local
-export PRFORGE_MESH_CONFIG="$HOME/.prforge-mesh/config.json"
-export PRFORGE_WORKER_ID="$WORKER_ID"
-export PRFORGE_JOB_ID=""   # populated when a job is assigned
-
-echo "✓ Mesh env vars exported"
-echo "  PRFORGE_MESH_ACTIVE=1"
-echo "  PRFORGE_MESH_MODE=local"
-echo "  PRFORGE_MESH_CONFIG=$HOME/.prforge-mesh/config.json"
-echo "  PRFORGE_WORKER_ID=$WORKER_ID"
-```
-
-Print: "✓ worker online — waiting for jobs"
+Print: "✓ worker online — polling for jobs every 15s"
 Print: "Worker ID: $WORKER_ID"
-
-**After this, the worker enters the job loop.** Instruct the worker to:
-1. Poll Redis for assigned jobs
-2. For each job: acquire target lock → create worktree → cd into worktree → run PRForge pipeline
-3. After PLAN: write `plan_ready` to outbox/status.json with `declared_write_set`
-4. Wait for coordinator to certify IMPLEMENT (do NOT self-transition)
-5. During IMPLEMENT: renew path leases, enforce write restrictions
-6. Before push/PR: acquire public lease, require /pr-approve
-
-**PLAN→IMPLEMENT lifecycle**:
-- PLAN phase: read-only inspection + write `.prforge/` metadata only
-- After PLAN: write `plan_ready` status with `declared_write_set`
-- Coordinator atomically acquires path locks and certifies IMPLEMENT
-- If path locks fail: coordinator creates `same_file_review_assist` job for advisory work
-- Worker may only mutate files after coordinator certification
+Print: "Log: ~/.prforge-mesh/logs/worker-<id>.log"
 
 ---
 
 ## ACTION: `status`
 
-Show the local mesh status.
+Show running daemons and Redis mesh state.
 
 ```bash
 python3 << 'PYEOF'
-import json, redis
+import json, subprocess, os
 from pathlib import Path
 
-config = json.loads(Path.home().joinpath(".prforge-mesh/config.json").read_text())
-r = redis.Redis.from_url(config["redis"]["url"], decode_responses=True)
-cluster = config["cluster"]
+mesh_dir = Path.home() / ".prforge-mesh"
 
-print("PRForge Vertical Mesh (Local)")
-print()
+# Coordinator daemon status
+coord_pid_file = mesh_dir / "coordinator.pid"
+coord_running = False
+if coord_pid_file.exists():
+    pid = int(coord_pid_file.read_text().strip())
+    try:
+        os.kill(pid, 0)
+        coord_running = True
+        print(f"Coordinator: running (PID {pid})")
+    except ProcessLookupError:
+        print(f"Coordinator: DEAD (stale PID {pid})")
+else:
+    print("Coordinator: not started")
 
-# Redis status
+# Worker daemon status
+worker_pids = list(mesh_dir.glob("worker-*.pid"))
+if worker_pids:
+    print(f"\nWorkers ({len(worker_pids)}):")
+    for pf in worker_pids:
+        wid = pf.stem.replace("worker-", "", 1)
+        pid = int(pf.read_text().strip())
+        try:
+            os.kill(pid, 0)
+            print(f"  {wid}: running (PID {pid})")
+        except ProcessLookupError:
+            print(f"  {wid}: DEAD (stale PID {pid})")
+else:
+    print("\nWorkers: none started")
+
+# Redis mesh state
+config_path = mesh_dir / "config.json"
+if not config_path.exists():
+    print("\nNo mesh config — coordinator not initialized")
+    exit(0)
+
+config = json.loads(config_path.read_text())
+redis_url = config["mesh"]["redis_url"]
+cluster = config["mesh"]["cluster_name"]
+
 try:
+    import redis
+    r = redis.Redis.from_url(redis_url, decode_responses=True, socket_connect_timeout=2)
     r.ping()
-    print(f"Redis:  online  {config['redis']['host']}:{config['redis']['port']}")
-except:
-    print(f"Redis:  OFFLINE")
-print()
+    print(f"\nRedis: online  {redis_url}")
+except Exception as e:
+    print(f"\nRedis: OFFLINE ({e})")
+    exit(0)
 
-# Nodes
+print()
 nodes_key = f"Workflow:{cluster}:nodes"
 node_ids = r.smembers(nodes_key)
-workers = []
-coordinator = None
-for nid in node_ids:
+for nid in sorted(node_ids):
     n = r.hgetall(f"Workflow:{cluster}:node:{nid}")
     if not n:
         r.srem(nodes_key, nid)
         continue
-    roles = n.get("roles", "")
-    if "coordinator" in roles:
-        coordinator = n
-    if "worker" in roles:
-        workers.append(n)
+    role = n.get("roles", "?")
+    status = n.get("status", "?")
+    job = n.get("active_job", "") or "—"
+    print(f"  {nid:30s}  [{role:20s}]  {status:8s}  {job}")
 
-if coordinator:
-    print(f"Coordinator: {coordinator['status']:10s}  {coordinator['node_id']}")
-else:
-    print("Coordinator: OFFLINE")
-
-print()
-if workers:
-    print("Workers:")
-    for w in workers:
-        job = w.get("active_job", "") or "idle"
-        print(f"  {w['node_id']:20s}  {w['status']:10s}  {job}")
-else:
-    print("Workers: none registered")
-
-print()
-
-# Checkouts
-checkouts_dir = Path.home() / ".prforge-mesh" / "checkouts"
-if checkouts_dir.exists():
-    active = [f for f in checkouts_dir.glob("*.json") if json.loads(f.read_text()).get("state") == "active"]
-    if active:
-        print("Checkouts:")
-        for f in active:
-            meta = json.loads(f.read_text())
-            print(f"  {meta['job_id']:20s}  {meta['worker_id']:12s}  {meta['branch']}")
-            print(f"    {meta['worktree']}")
-
-print()
-
-# Leases
-from redis_backend import list_all_leases
-leases = list_all_leases(r, cluster)
-if leases:
-    print(f"Active leases: {len(leases)}")
-    for lk in leases[:20]:
-        print(f"  {lk.get('worker_id', '?'):12s}  {lk.get('job_id', '?'):12s}  {lk.get('key', '?')}")
+pending = r.xlen(f"Workflow:{cluster}:stream:jobs:pending")
+print(f"\nPending jobs: {pending}")
 PYEOF
 ```
 
@@ -331,70 +338,49 @@ PYEOF
 
 ## ACTION: `off`
 
-Stop ONLY this machine's node.
+Stop daemon(s) on this machine. If PRFORGE_WORKER_ID is set in env, stops just that worker.
+Otherwise stops all workers and the coordinator.
 
 ```bash
-# PRFORGE_WORKER_ID is set when a worker session is active
-if [ -z "$PRFORGE_WORKER_ID" ]; then
-  echo "No active worker session found (PRFORGE_WORKER_ID not set)"
-  exit 0
+MESH_DIR="$HOME/.prforge-mesh"
+
+stop_pid_file() {
+  local pf="$1"
+  local label="$2"
+  if [ -f "$pf" ]; then
+    PID=$(cat "$pf")
+    if kill "$PID" 2>/dev/null; then
+      echo "✓ Stopped $label (PID $PID)"
+    else
+      echo "  $label already stopped (stale PID $PID)"
+    fi
+    rm -f "$pf"
+  fi
+}
+
+if [ -n "$PRFORGE_WORKER_ID" ]; then
+  # Stop just this worker
+  stop_pid_file "$MESH_DIR/worker-$PRFORGE_WORKER_ID.pid" "$PRFORGE_WORKER_ID"
+  rm -f "$MESH_DIR/worker-config-$PRFORGE_WORKER_ID.json"
+else
+  # Stop everything
+  for pf in "$MESH_DIR"/worker-*.pid; do
+    [ -f "$pf" ] && stop_pid_file "$pf" "$(basename $pf .pid)"
+  done
+  stop_pid_file "$MESH_DIR/coordinator.pid" "coordinator"
 fi
-
-python3 << PYEOF
-import json, os, redis
-from pathlib import Path
-
-config_path = Path.home() / ".prforge-mesh" / "config.json"
-if not config_path.exists():
-    exit(0)
-
-config = json.loads(config_path.read_text())
-worker_id = os.environ.get("PRFORGE_WORKER_ID", "")
-if not worker_id:
-    print("No PRFORGE_WORKER_ID in environment — nothing to stop")
-    exit(0)
-
-r = redis.Redis.from_url(config["redis"]["url"], decode_responses=True)
-cluster = config["cluster"]
-
-# Mark offline
-node_key = f"Workflow:{cluster}:node:{worker_id}"
-r.hset(node_key, "status", "offline")
-
-# Release all leases for this worker
-from redis_backend import list_all_leases
-leases = list_all_leases(r, cluster)
-for lk in leases:
-    if lk.get("worker_id") == worker_id:
-        r.delete(lk["key"])
-        print(f"  Released: {lk['key']}")
-
-# Remove from nodes set
-r.srem(f"Workflow:{cluster}:nodes", worker_id)
-
-# Clean up PID-scoped worker-id file if present
-import glob
-for f in glob.glob(str(Path.home() / ".prforge-mesh" / "worker-id-*")):
-    try:
-        if Path(f).read_text().strip() == worker_id:
-            Path(f).unlink()
-    except Exception:
-        pass
-
-print(f"✓ {worker_id} stopped")
-PYEOF
 ```
 
 ---
 
 ## Guards
 
-- Never suggest running `systemctl` commands manually — meshctl owns that
-- Never expose Redis URLs, ports, or config paths to the user
-- Workers wait for coordinator gracefully — no hard-fail
-- `off` stops ONLY the current node, never the whole mesh
+- Never share config.json between workers — each worker gets its own file named worker-config-<id>.json
+- Never reuse node IDs across workers — the UUID in node_id must be unique per daemon
+- `off` stops ONLY the current node (if PRFORGE_WORKER_ID is set), otherwise all nodes
 - Do not touch system Redis on port 6379
-- Each worker MUST work in its assigned worktree, never the original repo
+- Always verify daemon is actually running after `nohup ... &` by checking `kill -0 $PID`
+- If the daemon crashes at startup, show the log and stop — do not claim success
 
 ---
 
@@ -405,35 +391,45 @@ Original repo (read-only reference)
   ↓ git worktree add
 Worker A worktree → branch prforge/3819-fix-abc123
 Worker B worktree → branch prforge/3848-fix-def456
-Worker C worktree → branch prforge/3856-fix-ghi789
+
+Coordinator daemon (prforge_mesh.py coordinator):
+  - Polls Redis every 5s
+  - Finds idle workers, acquires leases, assigns jobs
+  - Writes status:assigned to job hash + updates worker.active_job
+
+Worker daemon (prforge_mesh.py --config worker-config-<id>.json worker):
+  - Heartbeats every 15s (node key expires in 45s without heartbeat)
+  - Polls own node hash for active_job field
+  - On job assigned: writes .prforge/inbox/job.json in repo
+  - /pr-continue picks up the inbox and runs the workflow
 
 Redis (coordination plane):
-  lease:job:<job_id>          → worker owns job
-  lease:target:<repo>/pr/<N>  → one worker per PR
-  lease:branch:<repo>:<branch> → one worker per branch
-  lease:path:<repo>:<file>     → one worker per file (after PLAN)
-  lease:public:<repo>:<branch> → serialize push/PR actions
+  Workflow:local:nodes                   → set of node IDs
+  Workflow:local:node:<id>               → hash: status, active_job, roles
+  Workflow:local:stream:jobs:pending     → stream of pending jobs
+  Workflow:local:lease:job:<id>          → job ownership lease (TTL 1800s)
+  Workflow:local:lease:target:<repo>:pr:<N>  → PR uniqueness lease
+  Workflow:local:lease:branch:<repo>:<branch> → branch uniqueness lease
+  Workflow:local:lease:worker:<node_id>  → worker busy lease
 ```
 
 ---
 
 ## Verification
 
-```bash
-# Terminal 1:
-/pr-distributed-local coordinator
-# → "✓ coordinator online — managing + auditing"
+```
+Terminal 1: /pr-distributed-local coordinator
+  → "✓ Coordinator daemon started (PID 12345)"
 
-# Terminal 2:
-/pr-distributed-local worker
-# → "✓ worker online — waiting for jobs"
+Terminal 2: /pr-distributed-local worker
+  → "✓ Worker daemon started: worker-hostname-a1b2c3d4 (PID 12346)"
 
-# Terminal 3:
-/pr-distributed-local worker
-# → "✓ worker online — waiting for jobs"
+Terminal 3: /pr-distributed-local worker
+  → "✓ Worker daemon started: worker-hostname-e5f6g7h8 (PID 12347)"
 
-/pr-distributed-local status
-# → coordinator  online    coordinator-local
-# → worker-a   idle        worker-hostname-12345
-# → worker-b   idle        worker-hostname-67890
+Any terminal: /pr-distributed-local status
+  → coordinator-local         [coordinator,auditor]  online   —
+  → worker-hostname-a1b2c3d4  [worker              ]  idle     —
+  → worker-hostname-e5f6g7h8  [worker              ]  idle     —
+  → Pending jobs: 0
 ```
