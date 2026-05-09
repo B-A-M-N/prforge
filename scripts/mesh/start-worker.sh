@@ -37,6 +37,23 @@ cat > "$MESH_DIR/worker-template.json" <<EOF
 }
 EOF
 
+# ── enforce max 2 workers ────────────────────────────────────────────────────
+MAX_WORKERS=2
+live=0
+for pf in "$MESH_DIR"/worker-*.pid; do
+  [ -f "$pf" ] || continue
+  pid=$(cat "$pf")
+  if kill -0 "$pid" 2>/dev/null; then
+    live=$((live + 1))
+  else
+    rm -f "$pf"  # clean up stale pid file
+  fi
+done
+if [ "$live" -ge "$MAX_WORKERS" ]; then
+  echo "ERROR: already $live worker(s) running (max $MAX_WORKERS). Run mesh-off.sh first."
+  exit 1
+fi
+
 # ── start daemon ─────────────────────────────────────────────────────────────
 mkdir -p "$MESH_DIR/logs"
 cd "$SCRIPT_DIR"
