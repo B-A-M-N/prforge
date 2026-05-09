@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 # PRForge mesh status — no AI interpretation needed.
-set -euo pipefail
 
 python3 << 'PYEOF'
 import json, os
@@ -8,27 +7,37 @@ from pathlib import Path
 
 mesh_dir = Path.home() / ".prforge-mesh"
 
+def pid_alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except (ProcessLookupError, PermissionError):
+        return False
+
 coord_pid_f = mesh_dir / "coordinator.pid"
 if coord_pid_f.exists():
     pid = int(coord_pid_f.read_text().strip())
-    try:
-        os.kill(pid, 0)
+    if pid_alive(pid):
         print(f"Coordinator: running (PID {pid})")
-    except ProcessLookupError:
+    else:
         print(f"Coordinator: DEAD (stale PID {pid})")
+        coord_pid_f.unlink(missing_ok=True)
 else:
     print("Coordinator: not started")
 
 worker_pids = list(mesh_dir.glob("worker-*.pid"))
-if worker_pids:
-    print(f"\nWorker daemons ({len(worker_pids)}):")
-    for pf in sorted(worker_pids):
-        pid = int(pf.read_text().strip())
-        try:
-            os.kill(pid, 0)
-            print(f"  PID {pid}: running  ({pf.name})")
-        except ProcessLookupError:
-            print(f"  PID {pid}: DEAD     ({pf.name})")
+live = []
+for pf in sorted(worker_pids):
+    pid = int(pf.read_text().strip())
+    if pid_alive(pid):
+        live.append((pid, pf.name))
+    else:
+        pf.unlink(missing_ok=True)
+
+if live:
+    print(f"\nWorker daemons ({len(live)}):")
+    for pid, name in live:
+        print(f"  PID {pid}: running  ({name})")
 else:
     print("\nNo worker daemons started")
 
@@ -62,8 +71,8 @@ for nid in sorted(node_ids):
     status = n.get("status", "?")
     role = n.get("roles", "?")
     job = n.get("active_job", "") or "—"
-    ghost = "  [GHOST - no TTL]" if ttl == -1 else f"  [TTL {ttl}s]"
-    print(f"  {nid:35s}  [{role:20s}]  {status:8s}  {job}{ghost}")
+    ghost = "  [GHOST]" if ttl == -1 else f"  [TTL {ttl}s]"
+    print(f"  {nid:35s}  [{role:14s}]  {status:8s}  {job}{ghost}")
 
 pending = r.xlen(f"Workflow:{cluster}:stream:jobs:pending")
 print(f"\nPending jobs: {pending}")
