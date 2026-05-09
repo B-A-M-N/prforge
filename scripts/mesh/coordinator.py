@@ -1371,6 +1371,9 @@ def _parse_allowed_modes(worker: dict) -> list:
 def _mode_allowed(job_type: str, allowed_modes: list) -> bool:
     if job_type in READONLY_JOB_TYPES:
         return True
+    # Empty allowed_modes means the worker accepts all job types
+    if not allowed_modes:
+        return True
     mapping = {
         "review_response":          "review_response",
         "pr_polish":                "pr_polish",
