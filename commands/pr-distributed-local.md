@@ -13,7 +13,8 @@ Find the mesh scripts directory first:
 ```bash
 MESH_SCRIPTS=$(python3 -c "
 from pathlib import Path
-hits = [p for p in Path.home().rglob('prforge_mesh.py') if '.git' not in str(p)]
+hits = [p for p in Path.home().rglob('prforge_mesh.py')
+        if '.git' not in str(p) and 'plugins' not in str(p)]
 print(hits[0].parent if hits else 'NOT_FOUND')
 ")
 echo "Mesh scripts: $MESH_SCRIPTS"
