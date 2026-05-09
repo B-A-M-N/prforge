@@ -6,15 +6,9 @@
     "when": "on-skill-invoke:prforge"
   },
   {
-    "name": "prforge-mesh-worker-watch",
-    "command": "${CLAUDE_PLUGIN_ROOT}/monitors/mesh-worker-watch.sh",
-    "description": "Watches Redis for jobs assigned to this worker instance. Emits a full action directive when a new job arrives — no polling needed by the instance.",
-    "when": "always"
-  },
-  {
-    "name": "prforge-mesh-coordinator-watch",
-    "command": "${CLAUDE_PLUGIN_ROOT}/monitors/mesh-coordinator-watch.sh",
-    "description": "Watches Redis for submission_ready jobs that passed peer review and need coordinator final approval. Pings the coordinator instance only when approval is needed.",
+    "name": "prforge-mesh-watch",
+    "command": "${CLAUDE_PLUGIN_ROOT}/monitors/mesh-watch.sh",
+    "description": "Unified mesh monitor. Silently tracks node state and queue. Worker mode: emits job directive only when idle+completed for 3+ min and a new job is assigned. Coordinator mode: emits approval directive only when idle 3+ min and a submission_ready job exists. Never interrupts mid-workflow. Role determined by ~/.prforge-mesh/my-node-id.",
     "when": "always"
   }
 ]

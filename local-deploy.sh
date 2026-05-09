@@ -26,6 +26,11 @@ while IFS= read -r mesh_py; do
     rsync "${RSYNC_OPTS[@]}" "$REPO/commands/" "$CMD_DIR/"
   fi
 
+  MON_DIR="$PLUGIN_ROOT/monitors"
+  if [ -d "$MON_DIR" ]; then
+    rsync "${RSYNC_OPTS[@]}" "$REPO/monitors/" "$MON_DIR/"
+  fi
+
   PLUGIN_JSON="$PLUGIN_ROOT/plugin.json"
   if [ -f "$PLUGIN_JSON" ] && ! $DRY_RUN; then
     cp "$REPO/.claude-plugin/plugin.json" "$PLUGIN_JSON"
