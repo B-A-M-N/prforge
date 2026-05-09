@@ -6,15 +6,15 @@
     "when": "on-skill-invoke:prforge"
   },
   {
-    "name": "prforge-distributed-worker-watch",
-    "command": "${CLAUDE_PLUGIN_ROOT}/monitors/distributed-worker-watch.sh",
-    "description": "Watches distributed worker state: assigned jobs, lease renewal, coordinator directives, revision jobs from audit loop. Runs on worker nodes in distributed mode.",
-    "when": "on-skill-invoke:prforge"
+    "name": "prforge-mesh-worker-watch",
+    "command": "${CLAUDE_PLUGIN_ROOT}/monitors/mesh-worker-watch.sh",
+    "description": "Watches Redis for jobs assigned to this worker instance. Emits a full action directive when a new job arrives — no polling needed by the instance.",
+    "when": "always"
   },
   {
-    "name": "prforge-distributed-coordinator-watch",
-    "command": "${CLAUDE_PLUGIN_ROOT}/monitors/distributed-coordinator-watch.sh",
-    "description": "Watches distributed coordinator state: worker heartbeats, queue depth, stale leases, signoff state, auditor verdicts, reviewer update dispatch. Runs on coordinator/auditor nodes.",
-    "when": "on-skill-invoke:prforge"
+    "name": "prforge-mesh-coordinator-watch",
+    "command": "${CLAUDE_PLUGIN_ROOT}/monitors/mesh-coordinator-watch.sh",
+    "description": "Watches Redis for submission_ready jobs that passed peer review and need coordinator final approval. Pings the coordinator instance only when approval is needed.",
+    "when": "always"
   }
 ]

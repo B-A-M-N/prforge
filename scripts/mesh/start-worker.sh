@@ -69,6 +69,8 @@ sleep 2
 
 if kill -0 "$DAEMON_PID" 2>/dev/null; then
   WORKER_ID=$(grep -m1 "worker node_id:" "$MESH_DIR/logs/worker-$DAEMON_PID.log" 2>/dev/null | awk '{print $NF}' || echo "<see log>")
+  # Write node-id so the monitor knows which node to watch
+  echo "$WORKER_ID" > "$MESH_DIR/my-node-id"
   echo "✓ worker started  PID=$DAEMON_PID  node_id=$WORKER_ID"
   echo "  log: $MESH_DIR/logs/worker-$DAEMON_PID.log"
   tail -5 "$MESH_DIR/logs/worker-$DAEMON_PID.log"
