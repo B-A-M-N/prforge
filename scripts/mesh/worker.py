@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import signal
 import sys
 import time
 from datetime import datetime, timezone
@@ -23,6 +24,8 @@ from redis_backend import (
     emit_event,
     get_job,
     heartbeat,
+    mark_offline,
+    node_key,
     release_job_leases,
     release_path_locks,
     renew_job_leases,
@@ -173,6 +176,22 @@ def run(r: redis.Redis, cluster: str, config: dict) -> None:
     pubsub  = notif_cfg.get("pubsub", True)
 
     logger.info("Worker started node=%s cluster=%s", node_id, cluster)
+
+    def _shutdown(signum: int, _frame: object) -> None:
+        logger.info("Worker shutting down node=%s signal=%d", node_id, signum)
+        try:
+            mark_offline(r, cluster, node_id)
+            r.delete(node_key(cluster, node_id))
+            r.srem(f"Workflow:{cluster}:nodes", node_id)
+        except Exception as exc:
+            logger.warning("Redis cleanup on shutdown failed: %s", exc)
+        pid_file = Path.home() / ".prforge-mesh" / f"worker-{os.getpid()}.pid"
+        pid_file.unlink(missing_ok=True)
+        logger.info("Worker deregistered node=%s", node_id)
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, _shutdown)
+    signal.signal(signal.SIGINT, _shutdown)
 
     while True:
         try:
