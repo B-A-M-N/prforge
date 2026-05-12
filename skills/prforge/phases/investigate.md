@@ -362,6 +362,8 @@ Before advancing to PLAN, all of the following must be true:
 
 - [ ] **Mode Re-validation:** Check `state.json`'s `task.type`. If it is `candidate_discovery`, abort INVESTIGATE immediately as mode was not correctly transitioned during Intake.
 - [ ] `repo_intelligence.md` written with relevant files, prior PRs, known constraints, validation commands
+- [ ] **GitNexus Evidence Check:** If `state.intelligence.gitnexus_available` is true, `state.intelligence.evidence.gitnexus_calls` MUST include "impact" and "context".
+- [ ] **GitNexus Content Check:** If `state.intelligence.gitnexus_available` is true, `repo_intelligence.md` MUST contain a `## GitNexus Intelligence` section and a `## GitNexus Impact` section with non-placeholder content detailing the blast radius.
 - [ ] Intelligence mode recorded in `state.json`
 - [ ] `state.blast_radius` initialized (will be updated during IMPLEMENT)
 - [ ] For `review_response` mode: `review_decomposition.md` complete, all comments classified, task queue populated

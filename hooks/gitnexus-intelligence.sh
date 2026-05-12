@@ -266,4 +266,24 @@ except: pass
   } >> "$INTELLIGENCE_FILE" 2>/dev/null || true
 fi
 
+# ── Semantic Memory Integration ────────────────────────────
+# Surface patterns from PRForge memory ledger into intelligence file
+CHANGED_FILES_CSV=$(git diff --name-only 2>/dev/null | head -50 | tr '\n' ',' | sed 's/,$//')
+REPO_ID=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || git remote get-url origin 2>/dev/null | grep -oE '[:/][^/:]+/[^/:]+\.git' | sed 's/^[:/]//' | sed 's/\.git$//' || basename "$REPO_ROOT")
+
+if [ -n "$CHANGED_FILES_CSV" ] && command -v python3 >/dev/null 2>&1; then
+  MEMORY_OUTPUT=$(python3 "$SCRIPT_DIR/../scripts/preflight_injector.py" --repo "$REPO_ID" --files "$CHANGED_FILES_CSV" --limit 5 2>/dev/null || true)
+  if [ -n "$MEMORY_OUTPUT" ]; then
+    python3 -c "
+import os
+f = '$INTELLIGENCE_FILE'
+content = open(f).read() if os.path.exists(f) else '# Repo Intelligence\n'
+section = '## Maintainer Patterns (Semantic Memory)\n\n' + '''$MEMORY_OUTPUT''' + '\n'
+if 'Maintainer Patterns (Semantic Memory)' not in content:
+    content += '\n' + section
+open(f, 'w').write(content)
+" 2>/dev/null || true
+  fi
+fi
+
 exit 0

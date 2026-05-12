@@ -82,7 +82,8 @@ def _ensure_pointer(job: dict, repo_path: str, artifact_dir: Path) -> None:
     )
 
     git_dir = Path(repo_path) / ".git"
-    if git_dir.exists():
+    # git worktrees have .git as a file (gitdir pointer), not a directory — skip in that case
+    if git_dir.is_dir():
         exclude = git_dir / "info" / "exclude"
         exclude.parent.mkdir(parents=True, exist_ok=True)
         existing = exclude.read_text().splitlines() if exclude.exists() else []
@@ -214,15 +215,19 @@ def _tick(
     pubsub: bool,
     config: dict | None = None,
 ) -> None:
-    # 1. Heartbeat
+    # 1. Read current Redis state and sync — picks up coordinator-assigned jobs
+    node_data = r.hgetall(f"Workflow:{cluster}:node:{node_id}")
+    if node_data:
+        # Sync active_job from Redis if coordinator assigned while we were idle
+        redis_active_job = node_data.get("active_job", "")
+        if redis_active_job and not node_state.get("active_job"):
+            node_state["active_job"] = redis_active_job
+            node_state["status"]     = node_data.get("status", "idle")
+
+    # 2. Heartbeat (always — required for initial registration too)
     heartbeat(r, cluster, node_state, ttl=hb_interval * 3)
 
-    # 2. Check assigned job
-    node_data = r.hgetall(f"Workflow:{cluster}:node:{node_id}")
-    if not node_data:
-        return
-
-    active_job_id = node_data.get("active_job", "")
+    active_job_id = node_state.get("active_job", "")
     if not active_job_id:
         node_state["status"] = "idle"
         node_state["active_job"] = ""

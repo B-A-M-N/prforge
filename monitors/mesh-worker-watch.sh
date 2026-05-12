@@ -5,8 +5,15 @@
 set -euo pipefail
 
 MESH_DIR="$HOME/.prforge-mesh"
-NODE_ID_FILE="$MESH_DIR/my-node-id"
-LOCK_FILE="$MESH_DIR/mesh-worker-watch.lock"
+# Resolve node-id: env var > slot-specific file > legacy single file
+if [ -n "${PRFORGE_WORKER_ID:-}" ]; then
+  NODE_ID_FILE=""
+elif [ -n "${PRFORGE_WORKER_SLOT:-}" ]; then
+  NODE_ID_FILE="$MESH_DIR/my-node-id-${PRFORGE_WORKER_SLOT}"
+else
+  NODE_ID_FILE="$MESH_DIR/my-node-id"
+fi
+LOCK_FILE="$MESH_DIR/mesh-worker-watch-${PRFORGE_WORKER_SLOT:-0}.lock"
 
 # Single-instance guard
 exec 9>"$LOCK_FILE"
@@ -16,6 +23,8 @@ trap 'rm -f "$LOCK_FILE"; exit 0' INT TERM EXIT
 emit() { echo "$*"; }
 
 get_node_id() {
+  if [ -n "${PRFORGE_WORKER_ID:-}" ]; then echo "$PRFORGE_WORKER_ID"; return 0; fi
+  [ -n "$NODE_ID_FILE" ] || return 1
   [ -f "$NODE_ID_FILE" ] || return 1
   cat "$NODE_ID_FILE"
 }

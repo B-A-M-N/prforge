@@ -80,6 +80,32 @@ If `unexpected_files` is non-empty:
 - If the unexpected changes are scope creep: remove them
 - Block approval until `scope_clean` is true
 
+## Guard #8: GitNexus Impact Analysis (Blast Radius)
+
+If GitNexus is available (`state.intelligence.gitnexus_available` is true), you MUST compute the blast radius using the knowledge graph instead of relying on the shallow `blast-radius.sh` hook.
+
+For each changed file, call GitNexus to find actual `d=1` (direct) callers:
+`mcp__gitnexus__impact({target: "<file>", direction: "upstream"})`
+
+Compute the Regression Risk Score based on the number of dependents and whether public APIs are touched:
+- **Low**: 0-2 internal dependents, no public API changes.
+- **Medium**: 3-10 dependents OR touches internal shared utilities.
+- **High**: >10 dependents OR changes public-facing API signatures.
+
+Record the results in `state.json` under `state.blast_radius`:
+```json
+{
+  "score": "Medium",
+  "files_changed": 2,
+  "test_coverage": "2 tests found",
+  "dependents_affected": 5,
+  "public_api_touched": false,
+  "d1_callers": ["src/caller1.ts", "src/caller2.ts"]
+}
+```
+
+When generating `approval.md` and `pr_body.md`, use these GitNexus results to populate the Blast Radius and Impact sections. Do not use the output of `blast-radius.sh` if GitNexus is available. Include the `d1_callers` list in `approval.md` so the human reviewer can see exactly what is affected.
+
 ## For New PRs: `pr_body.md`
 
 **FINALITY RULE — commit hash at top of PR body:**

@@ -5,6 +5,7 @@
 set -euo pipefail
 
 SRC="/home/bamn/prforge"
+PLUGIN_VERSION="$(python3 -c "import json; print(json.load(open('$SRC/.claude-plugin/plugin.json'))['version'])")"
 DRY_RUN=""
 
 if [[ "${1:-}" == "--dry-run" ]]; then
@@ -65,7 +66,7 @@ sync_profile() {
   local profile_label="$1"
   local profile_dir="$2"
   local marketplace_dst="${profile_dir}/plugins/marketplaces/local/plugins/prforge"
-  local cache_dst="${profile_dir}/plugins/cache/local/prforge/1.0.0"
+  local cache_dst="${profile_dir}/plugins/cache/local/prforge/${PLUGIN_VERSION}"
   local marketplace_index="${profile_dir}/plugins/marketplaces/local/.claude-plugin/marketplace.json"
 
   for DST in "$marketplace_dst" "$cache_dst"; do

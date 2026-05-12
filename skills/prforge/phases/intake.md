@@ -141,16 +141,18 @@ Detect:
 - Intelligence mode (see below)
 - **Branch/base drift** (Guard #3, see below)
 
-### Intelligence Mode Detection (Guard #10)
+### Intelligence Mode Detection and Index Freshness (Guard #10)
 
 1. Check if GitNexus MCP tools are available (test: `mcp__gitnexus__list_repos({})`)
-2. Check `gh auth status` - Note: This check must be performed whenever making API calls across the PRForge lifecycle, as auth tokens may expire mid-session.
-3. Set mode in `state.json`:
-   - `full_gitnexus` — GitNexus available and repo indexed
-   - `degraded_gh` — GitNexus unavailable, `gh` CLI available
+2. **Strict Index Freshness Check:** If GitNexus is available, read `.gitnexus/meta.json` and compare its `lastCommit` field against `git rev-parse HEAD`.
+   - If the index is stale (commits don't match): you MUST either run `npx gitnexus analyze --embeddings` to refresh it automatically, or if unable, record the state as `STALE_INDEX`, set `minimum_risk_floor: high`, and include a disclosure that the intelligence may be hallucinating history.
+3. Check `gh auth status` - Note: This check must be performed whenever making API calls across the PRForge lifecycle, as auth tokens may expire mid-session.
+4. Set mode in `state.json`:
+   - `full_gitnexus` — GitNexus available and repo indexed (and fresh)
+   - `degraded_gh` — GitNexus unavailable or stale, `gh` CLI available
    - `degraded_local` — Only local git/rg available
 
-**If GitNexus is unavailable**, record in `state.json` `intelligence`:
+**If GitNexus is unavailable or stale**, record in `state.json` `intelligence`:
 - `unavailable_capabilities`: list specific capabilities that were NOT available (e.g. `prior_PR_analysis`, `semantic_search`, `maintainer_history`, `cross_repo_similarity`)
 - `minimum_risk_floor`: set to `medium` unless repo intelligence was clearly sufficient from local/gh sources
 - `disclosure`: plain-English explanation for the approval artifact
@@ -240,6 +242,7 @@ Before advancing to INVESTIGATE, all of the following must be true:
 - [ ] `git_identity` (name, email, configured) recorded in `state.json`
 - [ ] Ownership classification recorded in `state.json` under `ownership`
 - [ ] Intelligence mode set in `state.json`
+- [ ] **GitNexus Freshness Check:** If GitNexus is available, index freshness was verified against HEAD, or a `STALE_INDEX` disclosure is recorded.
 - [ ] Branch/base drift status recorded in `state.json` under `branch_status`
 - [ ] Preflight snapshot saved to `.prforge/snapshots/preflight.patch`
 - [ ] Task type detected and mode playbook read (see kernel Sub-Document Loading)

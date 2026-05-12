@@ -49,6 +49,7 @@ I am ready to [push update / create PR / post review response].
 - **Files changed:** [N]
 - **Test coverage:** [N tests found / No tests found]
 - **Dependents affected:** [N files import changed modules]
+- **Direct Callers (d=1):** [List top 3-5 callers, or "None"]
 - **Public API touched:** Yes / No
 
 ## Validation

@@ -136,6 +136,15 @@ whether it's related to your changes or pre-existing.
 3. **Typecheck/lint** — if available
 4. **Full suite** — only if reasonable (not for large monorepos)
 
+## Step 3: Graph-Verified Validation Coverage (GVVC)
+
+After running tests, if GitNexus is available (`state.intelligence.gitnexus_available` is true), you MUST verify that every execution flow affected by the change is covered by validation.
+
+Call GitNexus to detect affected processes:
+`mcp__gitnexus__detect_changes({scope: "staged"})`
+
+Cross-reference the "Affected Processes" from GitNexus against the tests recorded in `validation_ledger.md`. If a process is affected but no test in the ledger touches it, you must add it to `validation_ledger.md` under a new section `## Graph Coverage Gaps` and document why it wasn't tested. This will trigger a `REQUIRES_APPROVAL` finding in the quality gate.
+
 ## Output: `validation_ledger.md`
 
 ```markdown
@@ -162,6 +171,9 @@ whether it's related to your changes or pre-existing.
 
 ## Tests Not Required
 - `path/to/config.ts` — config-only file, no logic to test
+
+## Graph Coverage Gaps (If GitNexus is available)
+- `CheckoutFlow` affected by changes but not covered by tests. Reason: E2E testing framework unavailable locally. (Triggers REQUIRES_APPROVAL)
 ```
 
 **Non-negotiable:** Never claim tests passed unless actually run. Never write
@@ -179,6 +191,7 @@ Before advancing to SELF_REVIEW, all of the following must be true:
 - [ ] `validation_ledger.md` written with honest pass/fail/not-run for every command
 - [ ] No changed source file has zero test coverage (or documented justification exists)
 - [ ] Lint passes with zero warnings (or failures documented as pre-existing/unrelated)
+- [ ] **Graph Validation Check:** If GitNexus is available, `detect_changes` was called and affected processes are cross-referenced in `validation_ledger.md`.
 - [ ] `state.json` phase updated to `VALIDATE`
 
 **You may not commit, push, or run any git write operation from this point.
